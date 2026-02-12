@@ -1,0 +1,1779 @@
+"""
+run_base_agent.py — Run a baseline agent (Gemini or Qwen) on the OmniGAIA benchmark.
+
+The script reads a JSON dataset, dispatches each question to the selected agent
+(with optional media attachments), evaluates the answers against ground truth,
+and writes per-item results plus aggregate metrics.
+
+Environment variables:
+    EVAL_BASE_URL:  Base URL of the evaluation LLM endpoint.
+    EVAL_API_KEY:   API key for the evaluation endpoint (default: "empty").
+    EVAL_MODEL:     Model name used for LLM-based answer equivalence checking.
+"""
+import os
+import sys
+import json
+import asyncio
+import logging
+import base64
+import mimetypes
+import httpx
+import argparse
+import re
+import time
+import math
+import random
+import cv2
+import numpy as np
+import hashlib
+import threading
+import tempfile
+import io
+from typing import List, Dict, Any, Optional, Union, Tuple
+from datetime import datetime
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+try:
+    from pydub import AudioSegment
+except ImportError:
+    AudioSegment = None
+
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
+
+try:
+    import whisper
+except ImportError:
+    whisper = None
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+SYSTEM_PROMPT = (
+    "You are an omni-modal general AI assistant. Please answer the question "
+    "provided to you based on the input image, audio, or video content.\n\n"
+    "You should think step by step to answer the question. You may use "
+    "available tools to assist with your analysis if needed.\n\n"
+    "Please provide your final answer using this format: "
+    "<answer>YOUR_ANSWER</answer>."
+)
+
+# Retry Config
+MAX_RETRIES = 5
+RETRY_DELAY_BASE = 3
+
+# Evaluation LLM (configurable via environment variables)
+EVAL_ENDPOINTS = [
+    {
+        "base_url": os.getenv("EVAL_BASE_URL", "http://localhost:8089/v1"),
+        "api_key": os.getenv("EVAL_API_KEY", "empty"),
+        "model": os.getenv("EVAL_MODEL", "deepseek-v3"),
+    },
+]
+
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("BaseAgent")
+
+# Category ordering (short label -> full label in data)
+CATEGORY_ORDER = ["Geo.", "Tech.", "Hist.", "Fin.", "Sport", "Art", "Movie", "Sci.", "Food"]
+CATEGORY_LABEL_MAP = {
+    "Geo.": "Geography & Travel",
+    "Tech.": "Technology",
+    "Hist.": "History & Society",
+    "Fin.": "Finance & Commerce",
+    "Sport": "Sports",
+    "Art": "Arts & Culture",
+    "Movie": "Movies",
+    "Sci.": "Science & Nature",
+    "Food": "Food & Nutrition",
+}
+
+_EVAL_HTTP_CLIENT = None
+
+
+def _get_eval_http_client() -> httpx.AsyncClient:
+    """Lazy-initialise a shared HTTP client for evaluation requests."""
+    global _EVAL_HTTP_CLIENT
+    if _EVAL_HTTP_CLIENT is None:
+        _EVAL_HTTP_CLIENT = httpx.AsyncClient(timeout=3600, trust_env=False)
+    return _EVAL_HTTP_CLIENT
+
+
+def _get_eval_client() -> Tuple[Any, str]:
+    """Return an ``AsyncOpenAI`` client + model name for answer evaluation."""
+    endpoint = random.choice(EVAL_ENDPOINTS)
+    http_client = _get_eval_http_client()
+    return (
+        AsyncOpenAI(
+            api_key=endpoint["api_key"],
+            base_url=endpoint["base_url"],
+            http_client=http_client,
+        ),
+        endpoint["model"],
+    )
+
+# =============================================================================
+# Tool Definitions & Mock Implementations
+# =============================================================================
+
+from tools.web_tools import (
+    web_search, 
+    page_browser, 
+    get_openai_function_web_search,
+    get_openai_function_page_browser
+)
+from tools.code_executor import (
+    code_executor,
+    get_openai_function_code_executor
+)
+
+
+# =============================================================================
+# Tool Definitions (Using actual tools)
+# =============================================================================
+
+class AgentTools:
+    """
+    Wrapper for tool implementations.
+    """
+    @staticmethod
+    async def web_search(query: str) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] web_search: {query}")
+        return await web_search(query)
+
+    @staticmethod
+    async def page_browser(urls: Union[str, List[str]]) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] page_browser: {urls}")
+        # page_browser in web_tools expects a list of urls
+        if isinstance(urls, str):
+            urls = [urls]
+        return await page_browser(urls)
+
+    @staticmethod
+    async def code_executor(code: str) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] code_executor: \n{code}")
+        return await code_executor(code)
+        
+# Gemini Tool Schemas - Adapted from OpenAI schemas in tools
+def _convert_openai_schema_to_gemini(openai_schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert OpenAI function schema to Gemini function declaration.
+    Gemini uses a slightly different format (camelCase and specific type names).
+    """
+    func = openai_schema['function']
+    
+    # Map types to Gemini types (string, integer, number, boolean, array, object)
+    # Note: Use lowercase for REST API JSON
+    def map_type(t: str) -> str:
+        t_map = {
+            "string": "string",
+            "integer": "integer",
+            "number": "number",
+            "boolean": "boolean",
+            "array": "array",
+            "object": "object"
+        }
+        return t_map.get(t.lower(), "string")
+        
+    parameters = func['parameters']
+    gemini_properties = {}
+    
+    for prop_name, prop_def in parameters['properties'].items():
+        gemini_prop = {
+            "type": map_type(prop_def['type']),
+            "description": prop_def.get('description', '')
+        }
+        if 'items' in prop_def:
+             gemini_prop['items'] = {"type": map_type(prop_def['items']['type'])}
+             if 'format' in prop_def['items']:
+                 # Gemini doesn't strictly use format, but description helps
+                 pass
+        
+        gemini_properties[prop_name] = gemini_prop
+        
+    return {
+        "name": func['name'],
+        "description": func['description'],
+        "parameters": {
+            "type": "object",
+            "properties": gemini_properties,
+            "required": parameters.get('required', [])
+        }
+    }
+
+GEMINI_TOOLS_SCHEMA = [
+    {
+        "functionDeclarations": [
+            _convert_openai_schema_to_gemini(get_openai_function_web_search()),
+            _convert_openai_schema_to_gemini(get_openai_function_page_browser()),
+            _convert_openai_schema_to_gemini(get_openai_function_code_executor())
+        ]
+    }
+]
+
+OPENAI_TOOLS_SCHEMA = [
+    get_openai_function_web_search(),
+    get_openai_function_page_browser(),
+    get_openai_function_code_executor()
+]
+
+# =============================================================================
+# Agent Implementation
+# =============================================================================
+
+class GeminiBaseAgent:
+    def __init__(self, api_key: str, model: str, api_base_url: str):
+        self.api_key = api_key
+        self.model = model
+        # Disable proxy by setting trust_env=False to ignore HTTP_PROXY/HTTPS_PROXY environment variables
+        self.http_client = httpx.AsyncClient(timeout=3600, trust_env=False)
+        self.request_url = api_base_url
+        self.tools = AgentTools()
+
+    async def _file_to_base64_part(self, path: str, input_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Reads file and converts to Gemini Inline Data format."""
+        if not os.path.exists(path):
+            logger.warning(f"File not found: {path}")
+            return None
+            
+        try:
+            mime_type, _ = mimetypes.guess_type(path)
+            if not mime_type:
+                # Fallbacks
+                if path.endswith(".mp4"): mime_type = "video/mp4"
+                elif path.endswith(".mp3"): mime_type = "audio/mpeg"
+                elif path.endswith(".wav"): mime_type = "audio/wav"
+                elif path.endswith(".jpg") or path.endswith(".jpeg"): mime_type = "image/jpeg"
+                elif path.endswith(".png"): mime_type = "image/png"
+                else: 
+                    # Use input_type to provide a default fallback if possible
+                    if input_type == "image": mime_type = "image/jpeg"
+                    elif input_type == "audio": mime_type = "audio/wav"
+                    elif input_type == "video": mime_type = "video/mp4"
+                    else: mime_type = "application/octet-stream"
+
+            # Correct mime_type based on input_type if provided
+            if input_type:
+                if input_type == "image" and not mime_type.startswith("image/"):
+                     mime_type = "image/jpeg"
+                elif input_type == "audio" and not mime_type.startswith("audio/"):
+                     mime_type = "audio/wav"
+                elif input_type == "video" and not mime_type.startswith("video/"):
+                     mime_type = "video/mp4"
+
+            # Handle audio truncation and transcoding if pydub is available
+            if (input_type == "audio" or mime_type.startswith("audio/")) and AudioSegment:
+                try:
+                    loop = asyncio.get_running_loop()
+                    def _process_audio():
+                        audio = AudioSegment.from_file(path)
+                        # Apply LlamaFactory compression strategy: Mono + 16kHz
+                        audio = audio.set_channels(1)
+                        audio = audio.set_frame_rate(16000)
+
+                        fifteen_mins_ms = 30 * 60 * 1000
+                        if len(audio) > fifteen_mins_ms:
+                            logger.info(f"Audio {os.path.basename(path)} > 30m. Truncating to 30m.")
+                            audio = audio[:fifteen_mins_ms]
+                        
+                        buf = io.BytesIO()
+                        audio.export(buf, format="mp3")
+                        return base64.b64encode(buf.getvalue()).decode("utf-8"), "audio/mpeg"
+                    
+                    b64_data, mime_type = await loop.run_in_executor(None, _process_audio)
+                except Exception as e:
+                    logger.warning(f"Pydub processing failed for {path}: {e}. Falling back to raw read.")
+                    loop = asyncio.get_running_loop()
+                    with open(path, "rb") as f:
+                        # Fallback to 20MB truncation if pydub fails
+                        max_audio_size = 20 * 1024 * 1024
+                        data = await loop.run_in_executor(None, f.read, max_audio_size)
+                        b64_data = base64.b64encode(data).decode("utf-8")
+            else:
+                # Blocking read is fine for this test script, but using asyncio to be consistent
+                loop = asyncio.get_running_loop()
+                with open(path, "rb") as f:
+                    data = await loop.run_in_executor(None, f.read)
+                    b64_data = base64.b64encode(data).decode("utf-8")
+                
+            return {
+                "inlineData": {
+                    "mimeType": mime_type,
+                    "data": b64_data
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to encode file {path}: {e}")
+            return None
+
+    def _extract_frames(self, video_path: str, max_frames: int = 30, target_fps: float = 1.0) -> List[Dict[str, Any]]:
+        frames = []
+        if not os.path.exists(video_path):
+            logger.warning(f"Video file not found: {video_path}")
+            return frames
+            
+        try:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            
+            if total_frames <= 0 or video_fps <= 0:
+                cap.release()
+                logger.warning(f"Invalid video metadata for {video_path}: frames={total_frames}, fps={video_fps}")
+                return frames
+
+            duration = total_frames / video_fps
+            
+            # Smart frame sampling strategy
+            nframes = int(duration * target_fps)
+            min_frames = 4
+            floor_frames = min(min_frames, max_frames)
+            
+            if total_frames < floor_frames:
+                nframes = total_frames
+            else:
+                nframes = min(nframes, max_frames)
+                nframes = max(floor_frames, nframes)
+                
+            if nframes == total_frames:
+                sample_indices = np.arange(total_frames)
+            else:
+                sample_indices = np.linspace(0, total_frames - 1, nframes, dtype=int)
+            
+            logger.info(f"Extracting {len(sample_indices)} frames from {video_path} (Duration: {duration:.2f}s, FPS: {video_fps}, Max limit: {max_frames})")
+
+            for idx in sample_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                
+                # Smart Resize
+                height, width = frame.shape[:2]
+                new_height, new_width = smart_resize(height, width)
+                
+                if new_height != height or new_width != width:
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+                    
+                _, buffer = cv2.imencode('.jpg', frame)
+                b64_image = base64.b64encode(buffer).decode('utf-8')
+                
+                frames.append({
+                    "inlineData": {
+                        "mimeType": "image/jpeg",
+                        "data": b64_image
+                    }
+                })
+            cap.release()
+        except Exception as e:
+            logger.error(f"Failed to extract frames from {video_path}: {e}")
+            
+        return frames
+
+    def _compress_video(self, video_path: str, max_frames: int = 128) -> Optional[Dict[str, Any]]:
+        """
+        Compresses a video by extracting frames and re-encoding them into a smaller video file.
+        Returns a dict compatible with Gemini Inline Data or None.
+        """
+        if not os.path.exists(video_path):
+            return None
+            
+        temp_video_path = None
+        try:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            
+            if total_frames <= 0 or video_fps <= 0:
+                cap.release()
+                return None
+
+            # LlamaFactory strategy: 2.0 FPS, Max 128 Frames
+            target_fps = 2.0
+            duration = total_frames / video_fps
+            
+            # Calculate indices based on FPS
+            nframes = int(duration * target_fps)
+            nframes = min(nframes, max_frames)
+            # Ensure at least 1 frame if duration > 0
+            nframes = max(1, nframes)
+
+            sample_indices = np.linspace(0, total_frames - 1, nframes, dtype=int)
+            
+            # Read first frame to determine size
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = cap.read()
+            if not ret:
+                cap.release()
+                return None
+                
+            height, width = frame.shape[:2]
+            # LlamaFactory strategy: Max 256x256 for video frames
+            new_height, new_width = smart_resize(height, width, factor=16, min_pixels=224*224, max_pixels=512*512)
+            
+            # Create temp file
+            fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
+            os.close(fd)
+            
+            # Initialize VideoWriter
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out_fps = 2.0 # Match sampling FPS
+            out = cv2.VideoWriter(temp_video_path, fourcc, out_fps, (new_width, new_height))
+            
+            for idx in sample_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                
+                if new_height != height or new_width != width:
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+                
+                out.write(frame)
+                
+            cap.release()
+            out.release()
+            
+            # Check size
+            comp_size = os.path.getsize(temp_video_path) / (1024*1024)
+            logger.info(f"Compressed video {os.path.basename(video_path)} to {comp_size:.2f}MB ({len(sample_indices)} frames)")
+            
+            # Read back and base64 encode
+            with open(temp_video_path, "rb") as f:
+                video_data = f.read()
+                b64_video = base64.b64encode(video_data).decode("utf-8")
+                
+            return {
+                "inlineData": {
+                    "mimeType": "video/mp4",
+                    "data": b64_video
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to compress video {video_path}: {e}")
+            return None
+        finally:
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.remove(temp_video_path)
+                except:
+                    pass
+
+    async def _call_gemini_api(self, contents: List[Dict[str, Any]], tools: Optional[List[Dict]] = None, semaphore: Optional[asyncio.Semaphore] = None) -> Optional[Dict[str, Any]]:
+        """Raw API call with retries."""
+        headers = {
+            "api-key": self.api_key,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "contents": contents,
+            "systemInstruction": {
+                "parts": [{"text": SYSTEM_PROMPT}]
+            }
+        }
+        
+        if tools:
+            payload["tools"] = tools
+        
+        # Log the request for debugging
+        logger.debug(f"Request URL: {self.request_url}")
+        logger.debug(f"Payload keys: {payload.keys()}")
+
+        async def _do_request():
+            response = await self.http_client.post(
+                self.request_url, 
+                headers=headers, 
+                content=json.dumps(payload),
+                timeout=3600
+            )
+            return response
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                if semaphore:
+                    async with semaphore:
+                        response = await _do_request()
+                else:
+                    response = await _do_request()
+                
+                if response.status_code != 200:
+                    logger.error(f"API Error {response.status_code} (Attempt {attempt+1}): {response.text}")
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(RETRY_DELAY_BASE * (2 ** attempt))
+                        continue
+                    return None
+                
+                return response.json()
+            except Exception as e:
+                logger.error(f"Request failed (Attempt {attempt+1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAY_BASE * (2 ** attempt))
+                    continue
+                return None
+        return None
+
+    async def run(self, question: str, media_items: List[Union[str, Dict[str, str]]] = [], semaphore: Optional[asyncio.Semaphore] = None) -> Dict[str, Any]:
+        """
+        Main Agent Loop:
+        1. Construct initial message (Text + Media).
+        2. Call Model.
+        3. If Tool Call -> Execute -> Append Result -> Loop.
+        4. If Text -> Return.
+        """
+        logger.info(f"Starting Agent with question: {question}")
+        
+        # 1. Build Initial Content
+        media_parts = []
+        
+        frames_per_video = 128 # LlamaFactory default
+
+        for item in media_items:
+            path = item
+            input_type = None
+            if isinstance(item, dict):
+                path = item.get("path")
+                input_type = item.get("type")
+            
+            if path:
+                # Check video size for compression
+                is_video = False
+                if input_type == "video":
+                    is_video = True
+                elif path.endswith(('.mp4', '.mkv', '.avi', '.webm')):
+                    is_video = True
+                
+                if is_video:
+                    # Always apply LlamaFactory compression strategy regardless of size
+                    logger.info(f"Processing video {os.path.basename(path)} with LlamaFactory strategy (2FPS, Max 128 frames, 256x256).")
+                    
+                    # 1. Compress Video
+                    compressed_video_part = self._compress_video(path, max_frames=frames_per_video)
+                    if compressed_video_part:
+                        media_parts.append(compressed_video_part)
+                    
+                    # 2. Extract Audio (First 15 mins)
+                    if AudioSegment:
+                        try:
+                            loop = asyncio.get_running_loop()
+                            def _extract_audio_from_video():
+                                try:
+                                    audio = AudioSegment.from_file(path)
+                                    # Apply LlamaFactory compression strategy: Mono + 16kHz
+                                    audio = audio.set_channels(1)
+                                    audio = audio.set_frame_rate(16000)
+
+                                    max_mins_ms = 30 * 60 * 1000  # 30 minutes
+                                    if len(audio) > max_mins_ms:
+                                        audio = audio[:max_mins_ms]
+                                    buf = io.BytesIO()
+                                    audio.export(buf, format="mp3")
+                                    return base64.b64encode(buf.getvalue()).decode("utf-8")
+                                except IndexError:
+                                    return None
+                            
+                            b64_audio = await loop.run_in_executor(None, _extract_audio_from_video)
+                            
+                            if b64_audio:
+                                media_parts.append({
+                                    "inlineData": {
+                                        "mimeType": "audio/mpeg",
+                                        "data": b64_audio
+                                    }
+                                })
+                                logger.info(f"Extracted audio from {os.path.basename(path)} (Size: {len(b64_audio)/(1024*1024):.2f}MB base64)")
+                            else:
+                                logger.warning(f"Failed to extract audio from video {path}: No audio stream found.")
+
+                        except Exception as e:
+                            logger.warning(f"Failed to extract audio from video {path}: {e}")
+                else:
+                    # Static image or audio
+                    # For images, we should also ensure max pixels logic if not already handling it?
+                    # The current _file_to_base64_part reads raw bytes.
+                    # To strictly follow "same strategy", we should resize images to 1024x1024 (or 768x768).
+                    # But Gemini handles large images well. I will assume "video logic" was the main concern.
+                    # However, if audio > 15m, it is already truncated in _file_to_base64_part which aligns with budget.
+                    media_part = await self._file_to_base64_part(path, input_type=input_type)
+                    if media_part:
+                        media_parts.append(media_part)
+        
+        # Combine question and media
+        contents = [
+            {"role": "user", "parts": [{"text": question}] + media_parts}
+        ]
+        
+        try:
+            # History maintains the conversation state
+            
+            # Max turns to prevent infinite loops
+            max_turns = 50
+            current_turn = 0
+            
+            all_tool_calls = []
+
+            while current_turn < max_turns:
+                current_turn += 1
+                logger.info(f"Turn {current_turn}...")
+                
+                # Call API
+                response_json = await self._call_gemini_api(contents, tools=GEMINI_TOOLS_SCHEMA, semaphore=semaphore)
+                
+                if not response_json:
+                    return {"output": "Error: API call failed.", "tool_calls": all_tool_calls, "messages": contents}
+                
+                try:
+                    candidate = response_json['candidates'][0]
+                    model_content = candidate['content'] # {"role": "model", "parts": [...]}
+                    contents.append(model_content) # Add model response to history
+                    
+                    parts = model_content.get('parts', [])
+                    if not parts:
+                        return {"output": "Error: Empty response from model.", "tool_calls": all_tool_calls, "messages": contents}
+
+                    # Check for Function Calls
+                    function_calls = []
+                    text_response = []
+                    
+                    for part in parts:
+                        if 'functionCall' in part:
+                            function_calls.append(part['functionCall'])
+                            all_tool_calls.append(part['functionCall'])
+                        if 'text' in part:
+                            text_response.append(part['text'])
+                    
+                    # If text only, we are done
+                    if not function_calls:
+                        final_ans = "".join(text_response)
+                        logger.info(f"Final Answer: {final_ans}")
+                        return {"output": final_ans, "tool_calls": all_tool_calls, "messages": contents}
+                    
+                    # Handle Function Calls - Execute all tools in parallel
+                    async def execute_tool(fc):
+                        fn_name = fc['name']
+                        fn_args = fc.get('args', {})
+                        
+                        logger.info(f"Executing tool: {fn_name} with args: {fn_args}")
+                        
+                        # Execute Tool
+                        tool_result = {}
+                        max_tool_retries = 3
+                        
+                        if hasattr(self.tools, fn_name):
+                            tool_func = getattr(self.tools, fn_name)
+                            for attempt in range(max_tool_retries):
+                                try:
+                                    # All our actual tools are async now
+                                    tool_result = await tool_func(**fn_args)
+                                    if not tool_result and attempt < max_tool_retries - 1:
+                                        logger.warning(f"Tool {fn_name} returned empty result (Attempt {attempt+1}). Retrying...")
+                                        await asyncio.sleep(1)
+                                        continue
+                                    break
+                                except Exception as e:
+                                    if attempt < max_tool_retries - 1:
+                                        logger.warning(f"Tool {fn_name} failed (Attempt {attempt+1}): {e}. Retrying...")
+                                        await asyncio.sleep(1)
+                                    else:
+                                        tool_result = {"error": str(e)}
+                        else:
+                            tool_result = {"error": f"Tool {fn_name} not found."}
+                        
+                        # Format tool result as text (more compatible with different Gemini gateways)
+                        result_text = f"[Tool: {fn_name}]\nResult: {json.dumps(tool_result, ensure_ascii=False, indent=2)}"
+                        return result_text
+                    
+                    # Execute all tools in parallel
+                    tool_results_text = await asyncio.gather(*[execute_tool(fc) for fc in function_calls])
+                    
+                    # Append Function Results as a user message (text format for compatibility)
+                    # This avoids issues with different functionResponse format implementations
+                    combined_results = "\n\n".join(tool_results_text)
+                    contents.append({
+                        "role": "user", 
+                        "parts": [{"text": combined_results}]
+                    })
+                    
+                except (KeyError, IndexError) as e:
+                    logger.error(f"Error parsing response: {e}")
+                    error_msg = "Error parsing model response."
+                    contents.append({"role": "model", "parts": [{"text": error_msg}]})
+                    return {"output": error_msg, "tool_calls": all_tool_calls, "messages": contents}
+            
+            error_msg = "Max turns reached without final answer."
+            contents.append({"role": "model", "parts": [{"text": error_msg}]})
+            return {"output": error_msg, "tool_calls": all_tool_calls, "messages": contents}
+        
+        except Exception as e:
+            logger.error(f"Error in Gemini run loop: {e}")
+            error_msg = f"Error: {str(e)}"
+            contents.append({"role": "model", "parts": [{"text": error_msg}]})
+            return {"output": error_msg, "tool_calls": all_tool_calls, "messages": contents}
+
+    async def close(self):
+        await self.http_client.aclose()
+
+class QwenBaseAgent:
+    def __init__(self, api_key: str, model: str, api_base_url: str):
+        self.api_key = api_key
+        self.model = model
+        self.api_base_url = api_base_url
+        if AsyncOpenAI is None:
+            raise ImportError("openai package is required for QwenBaseAgent")
+        self.client = AsyncOpenAI(api_key=api_key, base_url=api_base_url)
+        self.tools = AgentTools()
+
+    def _is_url(self, s: str) -> bool:
+        return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://") or s.startswith("data:"))
+
+    def _to_data_url(self, path: str, default_mime: str) -> str:
+        mime, _ = mimetypes.guess_type(path)
+        mime = mime or default_mime
+        try:
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:{mime};base64,{b64}"
+        except Exception as e:
+            logger.error(f"Failed to convert {path} to data URL: {e}")
+            raise
+
+    def _build_part(self, kind: str, source: str) -> dict:
+        default_mimes = {
+            "image": "image/jpeg",
+            "audio": "audio/wav",
+            "video": "video/mp4",
+        }
+        if self._is_url(source):
+            url = source
+        else:
+            if not os.path.exists(source):
+                logger.warning(f"{kind} file not found: {source}")
+                return None
+            url = self._to_data_url(source, default_mimes[kind])
+        
+        return {
+            "type": f"{kind}_url",
+            f"{kind}_url": {"url": url},
+        }
+
+    def _build_tools_prompt(self) -> str:
+        """Build Hermes-style tools prompt for manual tool calling."""
+        tools_json = []
+        for tool in OPENAI_TOOLS_SCHEMA:
+            func = tool["function"]
+            tools_json.append(json.dumps(func, ensure_ascii=False))
+        
+        tools_str = "\n".join(tools_json)
+        
+        return f"""# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{tools_str}
+</tools>
+
+For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": "<function-name>", "arguments": <args-json-object>}}
+</tool_call>"""
+
+    def _parse_tool_calls(self, content: str) -> List[Dict[str, Any]]:
+        """Parse <tool_call> tags from model output."""
+        tool_calls = []
+        pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        matches = re.findall(pattern, content, re.DOTALL)
+        
+        for i, match in enumerate(matches):
+            try:
+                tool_call_data = json.loads(match)
+                tool_calls.append({
+                    "id": f"call_{i}_{int(time.time()*1000)}",
+                    "name": tool_call_data.get("name"),
+                    "arguments": tool_call_data.get("arguments", {})
+                })
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse tool call JSON: {match}, error: {e}")
+                continue
+        
+        return tool_calls
+
+    def _format_tool_results(self, tool_results: List[Dict[str, Any]]) -> str:
+        """Format tool results for Hermes-style template."""
+        results_str = []
+        for result in tool_results:
+            results_str.append(f"{result['content']}")
+        return "\n".join(results_str)
+
+    async def run(self, question: str, media_items: List[Union[str, Dict[str, str]]] = [], semaphore: Optional[asyncio.Semaphore] = None) -> Dict[str, Any]:
+        # logger.info(f"Starting Qwen Agent with question: {question}")
+        
+        # 1. Build Initial Content
+        content_parts = []
+        
+        for item in media_items:
+            path = item
+            kind = "image"
+            
+            if isinstance(item, dict):
+                path = item.get("path")
+                t = item.get("type", "image")
+                if t == "video": kind = "video"
+                elif t == "audio": kind = "audio"
+                else: kind = "image"
+            else:
+                # Determine kind based on extension
+                if path.endswith(('.mp4', '.mkv', '.avi', '.webm')):
+                    kind = "video"
+                elif path.endswith(('.wav', '.mp3', '.flac', '.m4a')):
+                    kind = "audio"
+            
+            if path:
+                part = self._build_part(kind, path)
+                if part:
+                    content_parts.append(part)
+
+        if question:
+            content_parts.append({"type": "text", "text": question})
+        
+        # embed tools in system prompt
+        system_content = SYSTEM_PROMPT + "\n\n" + self._build_tools_prompt()
+        
+        # Convert system content to list format to avoid "can only concatenate list (not "str") to list" error
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_content}]},
+            {"role": "user", "content": content_parts}
+        ]
+        
+        max_turns = 50
+        current_turn = 0
+        all_tool_calls = []
+
+        while current_turn < max_turns:
+            current_turn += 1
+            logger.info(f"Turn {current_turn}...")
+            
+            try:
+                # Use manual Hermes-style tool calling
+                response = await self._run_with_tools(messages, semaphore, all_tool_calls)
+                if response is not None:
+                    response["messages"] = messages
+                    return response
+                continue
+
+            except Exception as e:
+                logger.error(f"Error in Qwen run loop: {e}")
+                return {"output": f"Error: {str(e)}", "tool_calls": all_tool_calls, "messages": messages}
+        
+        return {"output": "Max turns reached.", "tool_calls": all_tool_calls, "messages": messages}
+
+    async def _run_with_tools(self, messages: List[Dict], semaphore: Optional[asyncio.Semaphore], all_tool_calls: List) -> Optional[Dict[str, Any]]:
+        """
+        Run with manual Hermes-style tool calling (no tools parameter).
+        Returns None to continue the loop, or a result dict to finish.
+        """
+        async def _do_request():
+            # NOTE: Removed tools=OPENAI_TOOLS_SCHEMA and tool_choice="auto" to prevent server-side injection issues.
+            # We are manually injecting tools via system prompt.
+            return await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=20480,
+                timeout=6000,
+                temperature=0.6,
+                top_p=0.95,
+                extra_body={
+                    'top_k': 20,
+                    # 'include_stop_str_in_output': True,
+                    'repetition_penalty': 1.05,
+                },
+            )
+        
+        if semaphore:
+            async with semaphore:
+                response = await _do_request()
+        else:
+            response = await _do_request()
+
+        usage_info = None
+        if hasattr(response, 'usage') and response.usage:
+             u = response.usage
+             usage_info = {
+                 "completion_tokens": u.completion_tokens,
+                 "prompt_tokens": u.prompt_tokens,
+                 "total_tokens": u.total_tokens
+             }
+             logger.info(f"Token Usage: {usage_info}")
+        
+        content = response.choices[0].message.content or ""
+        
+        # Check for reasoning_content (often used by reasoning models)
+        # Some compatible APIs (like DeepSeek) might return reasoning_content
+        reasoning_content = getattr(response.choices[0].message, "reasoning_content", None)
+        if reasoning_content:
+             formatted_reasoning = f"<think>{reasoning_content}</think>\n"
+             content = formatted_reasoning + content
+
+        # Keep <think> tags for logging, just strip whitespace
+        cleaned_content = content.strip()
+        
+        # Parse tool calls from content
+        tool_calls = self._parse_tool_calls(content)
+        
+        if tool_calls:
+            logger.info(f"Parsed {len(tool_calls)} tool calls from response")
+            
+            # Add assistant message (normalized to list)
+            asst_msg = {
+                "role": "assistant", 
+                "content": [{"type": "text", "text": content}]
+            }
+            if usage_info:
+                asst_msg["usage"] = usage_info
+            messages.append(asst_msg)
+            
+            # Execute tools in parallel
+            async def execute_tool(tc):
+                fn_name = tc["name"]
+                fn_args = tc["arguments"]
+                logger.info(f"Executing tool: {fn_name} with args: {fn_args}")
+                
+                tool_result = {}
+                max_tool_retries = 3
+
+                if hasattr(self.tools, fn_name):
+                    tool_func = getattr(self.tools, fn_name)
+                    
+                    # Prepare args once if possible, or handle inside loop safely
+                    args_to_pass = fn_args
+                    if isinstance(args_to_pass, str):
+                        try:
+                            args_to_pass = json.loads(args_to_pass)
+                        except:
+                            pass # Let the tool function handle or fail
+
+                    for attempt in range(max_tool_retries):
+                        try:
+                            # Re-parsing inside loop in original code was: if isinstance(fn_args, str): fn_args = json.loads(fn_args)
+                            # We use prepared args
+                            if isinstance(args_to_pass, str):
+                                # Try parsing again if it failed before? No, just pass as is or dict
+                                pass
+                                
+                            tool_result = await tool_func(**args_to_pass)
+                            if not tool_result and attempt < max_tool_retries - 1:
+                                logger.warning(f"Tool {fn_name} returned empty result (Attempt {attempt+1}). Retrying...")
+                                await asyncio.sleep(1)
+                                continue
+                            break
+                        except Exception as e:
+                             if attempt < max_tool_retries - 1:
+                                logger.warning(f"Tool {fn_name} failed (Attempt {attempt+1}): {e}. Retrying...")
+                                await asyncio.sleep(1)
+                             else:
+                                tool_result = {"error": str(e)}
+                else:
+                    tool_result = {"error": f"Tool {fn_name} not found."}
+                
+                return {
+                    "name": fn_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False)
+                }
+            
+            tool_results = await asyncio.gather(*[execute_tool(tc) for tc in tool_calls])
+            
+            # Record tool calls
+            for tc in tool_calls:
+                all_tool_calls.append({
+                    "id": tc["id"],
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["arguments"]) if isinstance(tc["arguments"], dict) else tc["arguments"]
+                    }
+                })
+            
+            # Add tool results as user message (normalized to list)
+            tool_results_str = self._format_tool_results(tool_results)
+            messages.append({
+                "role": "tool", 
+                "content": [{"type": "text", "text": tool_results_str}]
+            })
+            
+            return None  # Continue the loop
+        else:
+            # No tool calls, return final answer
+            # Return full content including <think> tags as requested
+            if content:
+                log_content = re.sub(r'<think>.*?</think>', '', cleaned_content, flags=re.DOTALL).strip()
+                logger.info(f"Final Answer: {log_content}")
+                # Add assistant message to history before returning
+                asst_msg = {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": content}]
+                }
+                if usage_info:
+                    asst_msg["usage"] = usage_info
+                messages.append(asst_msg)
+                return {"output": content, "tool_calls": all_tool_calls}
+            else:
+                return {"output": "Error: Empty response from model.", "tool_calls": all_tool_calls}
+
+    async def close(self):
+        await self.client.close()
+
+def round_by_factor(number: int, factor: int) -> int:
+    """Returns the closest integer to 'number' that is divisible by 'factor'."""
+    return round(number / factor) * factor
+
+def ceil_by_factor(number: int, factor: int) -> int:
+    """Returns the smallest integer greater than or equal to 'number' that is divisible by 'factor'."""
+    return math.ceil(number / factor) * factor
+
+def floor_by_factor(number: int, factor: int) -> int:
+    """Returns the largest integer less than or equal to 'number' that is divisible by 'factor'."""
+    return math.floor(number / factor) * factor
+
+def smart_resize(height: int, width: int, factor: int = 28, min_pixels: int = 56 * 56, max_pixels: int = 1024 * 1024) -> Tuple[int, int]:
+    """
+    Rescales the image so that the following conditions are met:
+    1. Both dimensions (height and width) are divisible by 'factor'.
+    2. The total number of pixels is within the range ['min_pixels', 'max_pixels'].
+    3. The aspect ratio of the image is maintained as closely as possible.
+    """
+    if max(height, width) / min(height, width) > 200:
+        logger.warning(f"Absolute aspect ratio > 200, skipping resize for safety.")
+        return height, width
+
+    h_bar = max(factor, round_by_factor(height, factor))
+    w_bar = max(factor, round_by_factor(width, factor))
+    
+    if h_bar * w_bar > max_pixels:
+        beta = math.sqrt((height * width) / max_pixels)
+        h_bar = floor_by_factor(height / beta, factor)
+        w_bar = floor_by_factor(width / beta, factor)
+    elif h_bar * w_bar < min_pixels:
+        beta = math.sqrt(min_pixels / (height * width))
+        h_bar = ceil_by_factor(height * beta, factor)
+        w_bar = ceil_by_factor(width * beta, factor)
+    
+    return h_bar, w_bar
+
+# =============================================================================
+# Helper: ASR Manager
+# =============================================================================
+
+class ASRManager:
+    def __init__(self, cache_dir="./cache/audio_asr"):
+        self.cache_dir = cache_dir
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.model = None
+        self.lock = threading.Lock()
+
+    def load_model(self):
+        if self.model is None:
+             if whisper is None:
+                 raise ImportError("whisper not installed")
+             logger.info("Loading Whisper model (medium)...")
+             self.model = whisper.load_model("medium")
+
+    def get_cache_path(self, file_path):
+        try:
+            file_stat = os.stat(file_path)
+            # Use size and mtime for cache invalidation
+            key = f"{os.path.abspath(file_path)}_{file_stat.st_size}_{file_stat.st_mtime}"
+            hash_key = hashlib.md5(key.encode("utf-8")).hexdigest()
+            return os.path.join(self.cache_dir, f"{hash_key}.json")
+        except Exception:
+            # Fallback if stat fails
+            key = f"{file_path}"
+            hash_key = hashlib.md5(key.encode("utf-8")).hexdigest()
+            return os.path.join(self.cache_dir, f"{hash_key}.json")
+
+    def transcribe(self, file_path):
+        cache_path = self.get_cache_path(file_path)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                logger.info(f"ASR Cache hit for {os.path.basename(file_path)}")
+                return data.get("text", "")
+            except Exception as e:
+                logger.warning(f"Failed to read cache {cache_path}: {e}")
+
+        # Ensure model loading and inference are thread-safe
+        with self.lock:
+            self.load_model()
+            logger.info(f"Transcribing {os.path.basename(file_path)}...")
+            try:
+                result = self.model.transcribe(file_path)
+                text = result.get('text', '').strip()
+                
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump({"text": text, "path": file_path}, f, ensure_ascii=False)
+                
+                return text
+            except Exception as e:
+                logger.error(f"ASR failed for {file_path}: {e}")
+                return f"[ASR Error: {str(e)}]"
+
+# =============================================================================
+# Helper: OmniInfoManager (Reuse from check_qa_quality_gemini.py logic)
+# =============================================================================
+
+class OmniInfoManager:
+    """Resolve file paths based on media IDs embedded in questions.
+
+    Set the environment variable ``OMNIGAIA_DATA_DIR`` to point at the root
+    directory that contains the benchmark media files.  The expected layout is::
+
+        $OMNIGAIA_DATA_DIR/
+          video/       # .mp4, .mkv, …
+          audio/       # .wav, .mp3, …
+          image/       # .jpg, .png, …
+    """
+
+    _DATA_ROOT = os.getenv("OMNIGAIA_DATA_DIR", os.path.join(".", "data"))
+
+    BASE_DIRS = {
+        "video": [os.path.join(_DATA_ROOT, "video")],
+        "audio": os.path.join(_DATA_ROOT, "audio"),
+        "image": os.path.join(_DATA_ROOT, "image"),
+    }
+    
+    EXTENSIONS = {
+        'video': ['.mp4', '.mkv', '.avi', '.webm'],
+        'audio': ['.wav', '.mp3', '.flac', '.m4a'],
+        'image': ['.jpg', '.jpeg', '.png']
+    }
+
+    def __init__(self):
+        pass
+
+    def _find_file(self, base_dirs: Union[str, List[str]], raw_id: str, extensions: List[str]) -> Optional[str]:
+        if isinstance(base_dirs, str):
+            base_dirs = [base_dirs]
+            
+        for base_dir in base_dirs:
+            # Try exact match first if raw_id has extension
+            if os.path.exists(os.path.join(base_dir, raw_id)):
+                return os.path.join(base_dir, raw_id)
+            # Try adding extensions
+            for ext in extensions:
+                if os.path.exists(os.path.join(base_dir, raw_id + ext)):
+                    return os.path.join(base_dir, raw_id + ext)
+        return None
+
+    def _clean_id(self, media_id: str) -> str:
+        # Remove angle brackets
+        s = re.sub(r'[<>]', '', media_id)
+        
+        # Recursively strip common prefixes
+        prefixes = ["video_", "audio_", "image_"]
+        for p in prefixes:
+            if s.startswith(p):
+                s = s[len(p):]
+                break
+        return s
+
+    def get_file_path(self, media_id: str) -> Optional[str]:
+        raw_id = self._clean_id(media_id)
+        if not raw_id:
+            return None
+
+        if "image" in media_id:
+            found = self._find_file(self.BASE_DIRS["image"], raw_id, self.EXTENSIONS["image"])
+            if found:
+                return found
+
+        if "audio" in media_id:
+            found = self._find_file(self.BASE_DIRS["audio"], raw_id, self.EXTENSIONS["audio"])
+            if found:
+                return found
+
+        if "video" in media_id:
+            found = self._find_file(self.BASE_DIRS["video"], raw_id, self.EXTENSIONS["video"])
+            if found:
+                return found
+
+        return None
+
+    def get_file_paths_for_item(self, item: Dict[str, Any]) -> List[str]:
+        """Extract file paths from a QA item's sources list or question string."""
+        paths = []
+
+        # Only match specific multimodal ID formats: <image_...>, <audio_...>, <video_...>
+        ids = re.findall(r'<((?:image|audio|video)_[^>]+)>', item["question"])
+        for mid in ids:
+            path = self.get_file_path(mid)
+            if path:
+                paths.append(path)
+            else:
+                logger.warning(f"File path not found for Media ID in question: {mid}")
+                    
+        return list(set(paths)) # Unique paths
+
+    def get_audio_for_video(self, video_path: str) -> Optional[str]:
+        """Try to find a corresponding audio file for a given video path."""
+        basename = os.path.splitext(os.path.basename(video_path))[0]
+        found = self._find_file(self.BASE_DIRS["audio"], basename, self.EXTENSIONS["audio"])
+        if found:
+            return found
+        return None
+
+# =============================================================================
+# Helper: Check Equivalence
+# =============================================================================
+
+async def check_equivalence(question: str, predicted: str, standard: str) -> Tuple[bool, str]:
+    """
+    Checks if predicted answer is equivalent to standard answer using an LLM.
+    Returns (is_equivalent, full_response_content).
+    """
+    if not predicted: 
+        return False, "No prediction provided."
+        
+    prompt = f"""Please determine if the model correctly predicted the answer.
+Question: {question}
+Model Predicted Answer: {predicted}
+Labeled Answer: {standard}
+Return 'Correct' if the model's prediction is completely accurate, otherwise return 'Incorrect'. Provide only this single word response."""
+
+    if AsyncOpenAI is None:
+        raise ImportError("openai package is required for AsyncOpenAI client")
+    client, model_name = _get_eval_client()
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=40960,
+                extra_body={"chat_template_kwargs": {"thinking": False}},
+                timeout=600,
+            )
+            full_content = response.choices[0].message.content or ""
+            content = full_content
+            if "</think>" in content:
+                content = content.split("</think>")[-1].strip()
+            if "Incorrect" in content:
+                return False, full_content
+            return True, full_content
+        except Exception as e:
+            logger.error(f"Eval Request Failed (Attempt {attempt+1}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY_BASE * (2 ** attempt))
+                continue
+    return False, f"Eval Request Failed after {MAX_RETRIES} attempts."
+
+# =============================================================================
+# Helper: Metrics
+# =============================================================================
+
+def get_modality_category(item: Dict[str, Any]) -> str:
+    """Classifies an item as 'video' or 'audio_image' based on omni_modal_input."""
+    omni_input = item.get("omni_modal_input", [])
+    if not isinstance(omni_input, list):
+        return "audio_image"
+    if any(isinstance(inp, dict) and inp.get("type") == "video" for inp in omni_input):
+        return "video"
+    return "audio_image"
+
+def calculate_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not results:
+        return {
+            "count": 0,
+            "em": 0.0,
+            "llm_equal": 0.0,
+            "avg_tool_calls": 0.0,
+            "non_empty_ratio": 0.0
+        }
+    
+    count = len(results)
+    
+    # EM Score
+    total_em = sum(r.get("em_score", 0) for r in results)
+    avg_em = total_em / count
+    
+    # LLM Equal
+    def is_correct(val):
+        if isinstance(val, bool): return val
+        if isinstance(val, (int, float)): return val > 0
+        return False
+        
+    total_llm = sum(1 for r in results if is_correct(r.get("llm_equal")))
+    avg_llm = total_llm / count
+    
+    # Tool Calls
+    total_tool_calls = sum(r.get("tool_call_num", 0) for r in results)
+    avg_tool_calls = total_tool_calls / count
+    
+    # Non-empty answer
+    non_empty = sum(1 for r in results if r.get("predicted_answer"))
+    non_empty_ratio = non_empty / count
+    
+    return {
+        "count": count,
+        "em": avg_em,
+        "llm_equal": avg_llm,
+        "avg_tool_calls": avg_tool_calls,
+        "non_empty_ratio": non_empty_ratio
+    }
+
+
+def calculate_category_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    category_metrics: Dict[str, Any] = {}
+    for short_label in CATEGORY_ORDER:
+        full_label = CATEGORY_LABEL_MAP.get(short_label, short_label)
+        cat_items = [r for r in results if r.get("category") == full_label]
+        category_metrics[short_label] = calculate_metrics(cat_items)
+    return category_metrics
+
+# =============================================================================
+# Test Execution
+# =============================================================================
+
+async def main():
+    parser = argparse.ArgumentParser(description="Run Gemini Agent on QA items.")
+    parser.add_argument("--input_file", type=str, help="Path to the input JSON file containing QA items.")
+    parser.add_argument("--max_items", type=int, default=None, help="Limit the number of items to process.")
+    parser.add_argument('--concurrent_limit', type=int, default=5, help="Maximum number of concurrent API calls")
+    parser.add_argument('--api_key', type=str, help="API Key")
+    parser.add_argument('--api_base_url', type=str, help="API Base URL")
+    parser.add_argument('--level', type=str, default=None, help="Filter items by difficulty level (Easy, Medium, Hard)")
+    parser.add_argument('--model_name', type=str, help="Model Name")
+    parser.add_argument('--use_asr', action='store_true', help="Use ASR to convert audio/video audio to text input")
+    
+    args = parser.parse_args()
+    
+    if not args.input_file:  
+        print("Please provide an input file using --input_file")
+        # Fallback for testing without args
+        # args.input_file = "path/to/your/test.json" 
+        sys.exit(1)
+
+    if not os.path.exists(args.input_file):
+        print(f"Input file not found: {args.input_file}")
+        sys.exit(1)
+        
+    try:
+        with open(args.input_file, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+    except Exception as e:
+        print(f"Failed to load input JSON: {e}")
+        sys.exit(1)
+        
+    if not isinstance(items, list):
+        items = [items]
+        
+    if args.level:
+        target_level = args.level.strip().capitalize()
+        original_count = len(items)
+        items = [item for item in items if item.get("Level") == target_level]
+        print(f"Filtered items by level '{target_level}': {len(items)}/{original_count} kept.")
+
+    if args.max_items:
+        items = items[:args.max_items]
+
+    semaphore = asyncio.Semaphore(args.concurrent_limit)
+    
+    # Create agents pool
+    agents = []
+    
+    api_keys = [args.api_key]
+    
+    for key in api_keys:
+        if 'qwen' in args.model_name.lower():
+            agent = QwenBaseAgent(
+                api_key=key, 
+                model=args.model_name, 
+                api_base_url=args.api_base_url
+            )
+        else:
+            agent = GeminiBaseAgent(
+                api_key=key, 
+                model=args.model_name, 
+                api_base_url=args.api_base_url
+            )
+        agents.append(agent)
+    
+    omni_manager = OmniInfoManager()
+    
+    asr_manager = None
+    if args.use_asr:
+        asr_manager = ASRManager()
+        # Preload model to ensure thread safety and avoid latency during processing
+        try:
+            asr_manager.load_model()
+        except Exception as e:
+            print(f"Failed to load Whisper model: {e}")
+            sys.exit(1)
+
+    # Pre-process all audio with ASR if enabled
+    if asr_manager:
+        logger.info("Pre-processing audio files with ASR...")
+        all_audio_paths = set()
+        for item in items:
+            # 1. Check omni_modal_input
+            if "omni_modal_input" in item and item["omni_modal_input"]:
+                for inp in item["omni_modal_input"]:
+                    path = inp.get("path") if isinstance(inp, dict) else inp
+                    if path:
+                        all_audio_paths.add(path)
+            else:
+                # Fallback to OmniInfoManager
+                paths = omni_manager.get_file_paths_for_item(item)
+                for p in paths:
+                    all_audio_paths.add(p)
+        
+        # Filter for audio/video files only
+        valid_paths = []
+        for p in all_audio_paths:
+            if not os.path.exists(p): continue
+            if p.endswith(('.wav', '.mp3', '.flac', '.m4a', '.mp4', '.mkv', '.avi', '.webm')):
+                valid_paths.append(p)
+        
+        # Process sequentially with progress bar
+        if tqdm:
+            for p in tqdm(valid_paths, desc="ASR Pre-processing"):
+                asr_manager.transcribe(p)
+        else:
+            print(f"Processing {len(valid_paths)} files for ASR...")
+            for i, p in enumerate(valid_paths):
+                if i % 10 == 0: print(f"ASR: {i}/{len(valid_paths)}")
+                asr_manager.transcribe(p)
+        
+        logger.info("ASR Pre-processing complete.")
+
+    async def process_item(i, item, semaphore, agent):
+        question = item.get("question", "")
+        if not question:
+            return None
+            
+        # Get Media Files
+        media_items = []
+        
+        # 1. Check for omni_modal_input (New Format)
+        if "omni_modal_input" in item and item["omni_modal_input"]:
+             # Use the provided list of dicts directly
+             for inp in item["omni_modal_input"]:
+                 if "path" in inp:
+                     media_items.append(inp)
+        else:
+            # Fallback to old logic (OmniInfoManager)
+            paths = omni_manager.get_file_paths_for_item(item)
+            media_items.extend(paths)
+            
+        # 2. Check for file_input and append to question
+        if "file_input" in item:
+             file_paths = []
+             for f in item["file_input"]:
+                 if "path" in f:
+                     file_paths.append(f["path"])
+             
+             if file_paths:
+                 # Append to question
+                 question += f"\n\nReferenced Files:\n" + "\n".join(file_paths)
+        
+        # Handle ASR if enabled
+        if asr_manager:
+            new_media_items = []
+            transcripts = []
+            loop = asyncio.get_running_loop()
+            
+            for itm in media_items:
+                path = itm if isinstance(itm, str) else itm.get("path")
+                if not path or not os.path.exists(path):
+                     new_media_items.append(itm)
+                     continue
+                
+                # Determine type
+                is_video = False
+                is_audio = False
+                if isinstance(itm, dict):
+                     t = itm.get("type", "")
+                     if t == "video": is_video = True
+                     elif t == "audio": is_audio = True
+                
+                if not is_video and not is_audio:
+                     if path.endswith(('.mp4', '.mkv', '.avi', '.webm')):
+                          is_video = True
+                     elif path.endswith(('.wav', '.mp3', '.flac', '.m4a')):
+                          is_audio = True
+                
+                if is_audio:
+                     # Transcribe and replace audio item
+                     txt = await loop.run_in_executor(None, asr_manager.transcribe, path)
+                     if txt:
+                          transcripts.append(f"[Audio Transcript - {os.path.basename(path)}]:\n{txt}")
+                elif is_video:
+                     # Transcribe audio from video, keep video item for visuals
+                     txt = await loop.run_in_executor(None, asr_manager.transcribe, path)
+                     if txt:
+                          transcripts.append(f"[Video Audio Transcript - {os.path.basename(path)}]:\n{txt}")
+                     new_media_items.append(itm)
+                else:
+                     new_media_items.append(itm)
+            
+            media_items = new_media_items
+            if transcripts:
+                 question += "\n\n" + "\n\n".join(transcripts)
+
+        # Special handling for Qwen: add audio track for videos if available
+        # This mimics the behavior in extract_omni_info.py where audio is explicitly passed
+        if isinstance(agent, QwenBaseAgent) and not args.use_asr:
+            additional_audio = []
+            processed_videos = set()
+            
+            existing_paths = set()
+            for itm in media_items:
+                p = itm if isinstance(itm, str) else itm.get("path")
+                if p: existing_paths.add(p)
+
+            for itm in media_items:
+                path = itm if isinstance(itm, str) else itm.get("path")
+                if not path: continue
+                
+                is_video = False
+                if isinstance(itm, dict) and itm.get("type") == "video":
+                    is_video = True
+                elif path.endswith(('.mp4', '.mkv', '.avi', '.webm')):
+                    is_video = True
+                
+                if is_video:
+                    if path in processed_videos:
+                        continue
+                    processed_videos.add(path)
+                    audio_path = omni_manager.get_audio_for_video(path)
+                    if audio_path and audio_path not in existing_paths and audio_path not in additional_audio:
+                         additional_audio.append(audio_path)
+                    elif AudioSegment:
+                        # Fallback: extract audio directly from video and pass as data URL
+                        loop = asyncio.get_running_loop()
+
+                        def _extract_audio_from_video(video_path: str) -> Optional[str]:
+                            try:
+                                audio = AudioSegment.from_file(video_path)
+                                audio = audio.set_channels(1)
+                                audio = audio.set_frame_rate(16000)
+                                max_mins_ms = 30 * 60 * 1000  # 30 minutes
+                                if len(audio) > max_mins_ms:
+                                    audio = audio[:max_mins_ms]
+                                buf = io.BytesIO()
+                                audio.export(buf, format="mp3")
+                                return base64.b64encode(buf.getvalue()).decode("utf-8")
+                            except Exception as e:
+                                logger.warning(f"Failed to extract audio from video {video_path}: {e}")
+                                return None
+
+                        b64_audio = await loop.run_in_executor(None, _extract_audio_from_video, path)
+                        if b64_audio:
+                            data_url = f"data:audio/mpeg;base64,{b64_audio}"
+                            additional_audio.append({"type": "audio", "path": data_url})
+                            logger.info(f"Extracted audio from {os.path.basename(path)} for Qwen (fallback data URL).")
+            
+            if additional_audio:
+                # Add audio files to the list
+                media_items.extend(additional_audio)
+        
+        # Run Agent with semaphore
+        result_dict = await agent.run(question, media_items=media_items, semaphore=semaphore)
+        agent_output = result_dict["output"]
+        tool_calls = result_dict["tool_calls"]
+        messages = result_dict.get("messages", [])
+        
+        # Clean up messages (remove large base64 data)
+        def _truncate_large_data(obj):
+            """Recursively truncate large base64 data in messages."""
+            if isinstance(obj, dict):
+                new_obj = {}
+                for k, v in obj.items():
+                    if k == "thoughtSignature":
+                        continue
+                    # Gemini inlineData
+                    if k == "data" and isinstance(v, str) and len(v) > 1000:
+                        new_obj[k] = "<base64_data_truncated>"
+                    # Qwen data url
+                    elif k == "url" and isinstance(v, str) and v.startswith("data:") and len(v) > 1000:
+                        new_obj[k] = "<data_url_truncated>"
+                    else:
+                        new_obj[k] = _truncate_large_data(v)
+                return new_obj
+            elif isinstance(obj, list):
+                return [_truncate_large_data(item) for item in obj]
+            else:
+                return obj
+        
+        messages = _truncate_large_data(messages)
+
+        # Extract predicted answer
+        matches = re.findall(r'<answer>(.*?)</answer>', agent_output, re.DOTALL)
+        if matches:
+            predicted_answer = matches[-1].strip()
+        else:
+            # Fallback: Last 20 words
+            words = agent_output.split()
+            predicted_answer = " ".join(words[-20:])
+
+        # Prepare text for equivalence check
+        eval_predicted_text = predicted_answer
+        if not eval_predicted_text:
+            # Use response without reasoning
+            cleaned_output = re.sub(r'<think>.*?</think>', '', agent_output, flags=re.DOTALL).strip()
+            eval_predicted_text = cleaned_output
+
+        # Normalize and calculate EM
+        def normalize_text(s):
+            if not s: return ""
+            s = str(s).lower()
+            s = s.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+            return " ".join(s.split())
+            
+        ground_truth = item.get("answer", "")
+        em_score = 1 if normalize_text(predicted_answer) == normalize_text(ground_truth) else 0
+        
+        # Calculate LLM Equivalence
+        if predicted_answer:
+            if em_score == 1:
+                llm_equal = True
+                llm_eval_response = "EM is 1, skipping LLM evaluation."
+            else:
+                llm_equal, llm_eval_response = await check_equivalence(question, eval_predicted_text, ground_truth)
+        else:
+            llm_equal = False
+            llm_eval_response = "Predicted answer is empty, skipping LLM evaluation."
+        llm_score = 1 if llm_equal else 0
+
+        # Calculate tool call number
+        tool_call_num = len(tool_calls)
+        
+        # Collect results
+        result_item = {
+            "question": question,
+            "omni_modal_input": item.get("omni_modal_input"),
+            "annotated_solution": item.get("annotated_solution"),
+            "sources": item.get("sources"),
+            "question_type": item.get("question_type"),
+            "category": item.get("category"),
+            "answer": ground_truth,
+            "total_steps": item.get("total_steps"),
+            "difficulty": item.get("difficulty"),
+            "Level": item.get("Level"),
+            "required_external_tools": item.get("required_external_tools"),
+            "answerable_without_visual_content": item.get("answerable_without_visual_content"),
+            "answerable_without_audio_content": item.get("answerable_without_audio_content"),
+            "answerable_without_visual_and_audio_content": item.get("answerable_without_visual_and_audio_content"),
+            "answerable_without_tools": item.get("answerable_without_tools"),
+            "tool_call_num": tool_call_num,
+            "predicted_answer": predicted_answer,
+            "em_score": em_score,
+            "llm_equal": llm_score,
+            "llm_eval_response": llm_eval_response,
+            "messages": messages,
+        }
+        
+        return result_item
+    
+    try:
+        print(f"Processing {len(items)} items with concurrency limit {args.concurrent_limit}...")
+        
+        tasks = [process_item(i, item, semaphore, agents[i % len(agents)]) for i, item in enumerate(items)]
+        
+        if tqdm:
+            pbar = tqdm(total=len(tasks))
+            async def wrap_task(task):
+                res = await task
+                pbar.update(1)
+                return res
+            
+            wrapped_tasks = [wrap_task(task) for task in tasks]
+            results = await asyncio.gather(*wrapped_tasks)
+            pbar.close()
+        else:
+            results = await asyncio.gather(*tasks)
+
+        results = [r for r in results if r is not None]
+        
+        # Calculate metrics
+        overall_metrics = calculate_metrics(results)
+        
+        # Calculate metrics by Level
+        level_metrics = {}
+        for level in ["Easy", "Medium", "Hard"]:
+            level_results = [r for r in results if r.get("Level") == level]
+            level_metrics[level] = calculate_metrics(level_results)
+            
+        # Calculate metrics by question category in fixed order
+        category_metrics = calculate_category_metrics(results)
+
+        # Construct output path
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_name_safe = agents[0].model
+        output_dir = os.path.join(".", "outputs", f"base_agent_{model_name_safe}")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        avg_em = overall_metrics['em']
+        avg_llm_equal = overall_metrics['llm_equal']
+        
+        output_filename = f"run_{timestamp}_em{avg_em:.4f}_llmeq{avg_llm_equal:.4f}.json"
+        output_path = os.path.join(output_dir, output_filename)
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+            
+        # Save metrics file
+        metrics_data = {
+            "overall": overall_metrics,
+            "by_level": level_metrics,
+            "by_category": category_metrics,
+        }
+        metrics_filename = f"{os.path.splitext(output_filename)[0]}_metrics.json"
+        metrics_path = os.path.join(output_dir, metrics_filename)
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics_data, f, indent=2, ensure_ascii=False)
+        
+        # Print summary statistics
+        print(f"\n{'='*50}")
+        print(f"Results saved to {output_path}")
+        print(f"Metrics saved to {metrics_path}")
+        print(f"{'='*50}")
+        print(f"Total Items:            {overall_metrics['count']}")
+        print(f"Average EM Score:       {overall_metrics['em']:.4f}")
+        print(f"Average LLM Equal Score:{overall_metrics['llm_equal']:.4f}")
+        print(f"Average Tool Calls:     {overall_metrics['avg_tool_calls']:.2f}")
+        print(f"Non-Empty Answer Ratio: {overall_metrics['non_empty_ratio']:.4f}")
+        print("-" * 20)
+        for level in ["Easy", "Medium", "Hard"]:
+            m = level_metrics[level]
+            if m['count'] > 0:
+                print(f"{level:<8} (n={m['count']:<3}): EM={m['em']:.4f}, LLM_Eq={m['llm_equal']:.4f}")
+        
+        print("-" * 20)
+        for short_label in CATEGORY_ORDER:
+            m = category_metrics[short_label]
+            if m["count"] > 0:
+                print(f"{short_label:<5} (n={m['count']:<3}): EM={m['em']:.4f}, LLM_Eq={m['llm_equal']:.4f}")
+        print(f"{'='*50}")
+        
+    finally:
+        for agent in agents:
+             await agent.close()
+        if _EVAL_HTTP_CLIENT is not None:
+            await _EVAL_HTTP_CLIENT.aclose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
