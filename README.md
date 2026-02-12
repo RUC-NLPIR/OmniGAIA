@@ -1,4 +1,4 @@
-<h1 align="center">OmniGAIA<br><small>Omni-Modal General AI Assistants Benchmark</small></h1>
+<h1 align="center">OmniGAIA<br><small>Towards Native Omni-Modal AI Agents</small></h1>
 
 <div align="center">
 
@@ -15,15 +15,15 @@
 
 ## 💡 Overview
 
-**OmniGAIA** is a comprehensive benchmark designed to evaluate the capabilities of omni-modal general AI assistants. Unlike existing benchmarks that focus on a single modality, OmniGAIA requires agents to jointly reason over **video**, **audio**, and **image** inputs while leveraging external tools such as web search, code execution, and visual question answering.
+**OmniGAIA** is a comprehensive benchmark designed to evaluate the capabilities of omni-modal general AI assistants. Unlike existing benchmarks that focus on a single modality, OmniGAIA requires agents to jointly reason over **video**, **audio**, and **image** inputs while leveraging external tools such as web search and code execution.
 
-We also introduce **OmniAtlas**, an agentic reasoning system that extends a base LLM with *active perception* tools (`read_video`, `read_audio`, `read_image`), enabling the model to request and examine additional media segments during multi-step reasoning.
+We also introduce **OmniAtlas**, an agentic reasoning system that extends a base LLM with *active perception* tools, enabling the model to request and examine additional media segments during multi-step reasoning.
 
 ### ✨ Key Highlights
 
 - **Omni-Modal Benchmark:** 360 human-verified QA pairs spanning 9 domains, requiring joint understanding of video, audio, and image content.
 - **Agentic Event-Graph Construction:** A novel pipeline that builds structured event graphs from multi-modal sources using Gemini-3-Flash and DeepSeek-V3.2 with tool-augmented reasoning.
-- **External Tool Integration:** Agents are equipped with web search & browsing, code execution, visual QA, and cross-modal retrieval tools.
+- **External Tool Integration:** Agents are equipped with web search & browsing, code execution, and cross-modal retrieval tools.
 - **OmniAtlas Agent:** A fine-tuned agent with active perception capabilities and preference learning via OmniDPO.
 - **Multi-Dimensional Evaluation:** Tasks are categorised by difficulty (Easy / Medium / Hard) and domain, with both exact-match and LLM-based equivalence metrics.
 
@@ -84,8 +84,7 @@ OmniGAIA-Anon/
 │   ├── tools/                       # External tool implementations
 │   │   ├── __init__.py
 │   │   ├── web_tools.py             # Web search, page browsing, image search
-│   │   ├── code_executor.py         # Sandboxed Python code execution
-│   │   └── visual_qa.py             # Visual QA via multimodal model
+│   │   └── code_executor.py         # Sandboxed Python code execution
 │   ├── evaluate/
 │   │   ├── __init__.py
 │   │   └── eval_results.py          # Re-evaluate results with LLM equivalence
@@ -147,11 +146,6 @@ export EVAL_MODEL="deepseek-v3"
 # ── Tool: Web Search & Browsing ─────────────────────────────────
 export SERPER_API_KEY="your-serper-api-key"        # Google Serper API (https://serper.dev)
 export JINA_API_KEY="your-jina-api-key"            # Jina Reader API (https://jina.ai)
-
-# ── Tool: Visual QA ─────────────────────────────────────────────
-export VQA_BASE_URL="http://localhost:8000/v1"     # Multimodal model endpoint (e.g. Qwen3-Omni)
-export VQA_API_KEY="your-vqa-api-key"
-export VQA_MODEL="qwen3-omni"
 
 # ── Data & Cache Directories ────────────────────────────────────
 export OMNIGAIA_DATA_DIR="./data"                  # Root directory for benchmark media files
@@ -321,7 +315,6 @@ OmniGAIA agents are equipped with the following external tools:
 | **Web Search** | Google search via Serper API with result caching | `aiohttp`, Serper API |
 | **Page Browser** | Fetch and extract webpage content via Jina Reader API | `aiohttp`, `beautifulsoup4`, Jina API |
 | **Code Executor** | Sandboxed Python execution with common scientific libraries | Built-in (`exec`/`eval`) |
-| **Visual QA** | Query a multimodal model (e.g. Qwen3-Omni) about images/videos | `openai` SDK |
 | **Active Perception** *(OmniAtlas only)* | `read_video`, `read_audio`, `read_image` — request specific media segments during reasoning | `opencv-python`, `pydub`, `ffmpeg` |
 
 
