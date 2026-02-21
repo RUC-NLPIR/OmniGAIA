@@ -15,17 +15,23 @@
 
 ## 🎬 Demo
 
-#### Agentic Reasoning on "Image + Audio" Scenario
+### Agentic Reasoning on "Image + Audio" Scenario
 
 <div align="center">
-  <video src="./assets/demo_image_audio.mp4" />
+  <video controls width="95%">
+    <source src="./assets/demo_image_audio.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
 </div>
 
 
-#### Agentic Reasoning on "Video w/ Audio" Scenario
+### Agentic Reasoning on "Video w/ Audio" Scenario
 
 <div align="center">
-  <video src="./assets/demo_video.mp4" />
+  <video controls width="95%">
+    <source src="./assets/demo_video.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
 </div>
 
 ## 💡 Overview
