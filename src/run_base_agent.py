@@ -65,6 +65,14 @@ SYSTEM_PROMPT = (
     "<answer>YOUR_ANSWER</answer>."
 )
 
+ACTIVE_PERCEPTION_PROMPT_NOTE = (
+    '**Note:**\n'
+    '- If there are segments in the input image/audio/video that are unclear '
+    'to you, you should use the "read_image/read_audio/read_video" tool to '
+    "examine them carefully to ensure you have correctly perceived the input "
+    "media.\n"
+)
+
 # Retry Config
 MAX_RETRIES = 5
 RETRY_DELAY_BASE = 3
@@ -166,6 +174,41 @@ class AgentTools:
     async def code_executor(code: str) -> Dict[str, Any]:
         logger.info(f"[Tool Call] code_executor: \n{code}")
         return await code_executor(code)
+
+    @staticmethod
+    async def read_video(video_id: str, t_start: int, t_end: int) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] read_video: {video_id} ({t_start}-{t_end}s)")
+        return {
+            "status": "success",
+            "action": "read_video",
+            "video_id": video_id,
+            "t_start": t_start,
+            "t_end": t_end,
+            "message": f"Reading video {video_id} from {t_start}s to {t_end}s. Data will follow.",
+        }
+
+    @staticmethod
+    async def read_audio(audio_id: str, t_start: int, t_end: int) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] read_audio: {audio_id} ({t_start}-{t_end}s)")
+        return {
+            "status": "success",
+            "action": "read_audio",
+            "audio_id": audio_id,
+            "t_start": t_start,
+            "t_end": t_end,
+            "message": f"Reading audio {audio_id} from {t_start}s to {t_end}s. Data will follow.",
+        }
+
+    @staticmethod
+    async def read_image(image_ids: List[str], crop_box: Optional[List[int]] = None) -> Dict[str, Any]:
+        logger.info(f"[Tool Call] read_image: {image_ids}, crop_box={crop_box}")
+        return {
+            "status": "success",
+            "action": "read_image",
+            "image_ids": image_ids,
+            "crop_box": crop_box,
+            "message": f"Reading images {image_ids}. Data will follow.",
+        }
         
 # Gemini Tool Schemas - Adapted from OpenAI schemas in tools
 def _convert_openai_schema_to_gemini(openai_schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -229,6 +272,75 @@ OPENAI_TOOLS_SCHEMA = [
     get_openai_function_page_browser(),
     get_openai_function_code_executor()
 ]
+
+
+def get_openai_function_read_video() -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "read_video",
+            "description": "Reads a specific time segment of a video file to examine details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video_id": {"type": "string", "description": "The video identifier or filename."},
+                    "t_start": {"type": "integer", "description": "Start time in seconds."},
+                    "t_end": {"type": "integer", "description": "End time in seconds."},
+                },
+                "required": ["video_id", "t_start", "t_end"],
+            },
+        },
+    }
+
+
+def get_openai_function_read_audio() -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "read_audio",
+            "description": "Reads a specific time segment of an audio file to listen to details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "audio_id": {"type": "string", "description": "The audio identifier or filename."},
+                    "t_start": {"type": "integer", "description": "Start time in seconds."},
+                    "t_end": {"type": "integer", "description": "End time in seconds."},
+                },
+                "required": ["audio_id", "t_start", "t_end"],
+            },
+        },
+    }
+
+
+def get_openai_function_read_image() -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "read_image",
+            "description": (
+                "Reads specific images to view them in detail. Optionally crop the image by "
+                "providing a crop box [left, top, right, bottom]."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of image identifiers or filenames.",
+                    },
+                    "crop_box": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "description": "Optional. [left, top, right, bottom] crop coordinates.",
+                    },
+                },
+                "required": ["image_ids"],
+            },
+        },
+    }
 
 # =============================================================================
 # Agent Implementation
@@ -728,14 +840,16 @@ class GeminiBaseAgent:
         await self.http_client.aclose()
 
 class QwenBaseAgent:
-    def __init__(self, api_key: str, model: str, api_base_url: str):
+    def __init__(self, api_key: str, model: str, api_base_url: str, enable_active_perception: bool = False):
         self.api_key = api_key
         self.model = model
         self.api_base_url = api_base_url
+        self.enable_active_perception = enable_active_perception
         if AsyncOpenAI is None:
             raise ImportError("openai package is required for QwenBaseAgent")
         self.client = AsyncOpenAI(api_key=api_key, base_url=api_base_url)
         self.tools = AgentTools()
+        self.info_manager = OmniInfoManager()
 
     def _is_url(self, s: str) -> bool:
         return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://") or s.startswith("data:"))
@@ -751,7 +865,7 @@ class QwenBaseAgent:
             logger.error(f"Failed to convert {path} to data URL: {e}")
             raise
 
-    def _build_part(self, kind: str, source: str) -> dict:
+    def _build_part(self, kind: str, source: str) -> Optional[Dict[str, Any]]:
         default_mimes = {
             "image": "image/jpeg",
             "audio": "audio/wav",
@@ -764,21 +878,22 @@ class QwenBaseAgent:
                 logger.warning(f"{kind} file not found: {source}")
                 return None
             url = self._to_data_url(source, default_mimes[kind])
-        
+
         return {
             "type": f"{kind}_url",
             f"{kind}_url": {"url": url},
         }
 
-    def _build_tools_prompt(self) -> str:
+    def _build_tools_prompt(self, tools_schema: Optional[List[Dict[str, Any]]] = None) -> str:
         """Build Hermes-style tools prompt for manual tool calling."""
         tools_json = []
-        for tool in OPENAI_TOOLS_SCHEMA:
+        active_schema = tools_schema if tools_schema is not None else OPENAI_TOOLS_SCHEMA
+        for tool in active_schema:
             func = tool["function"]
             tools_json.append(json.dumps(func, ensure_ascii=False))
-        
+
         tools_str = "\n".join(tools_json)
-        
+
         return f"""# Tools
 
 You may call one or more functions to assist with the user query.
@@ -796,53 +911,390 @@ For each function call, return a JSON object with function name and arguments wi
     def _parse_tool_calls(self, content: str) -> List[Dict[str, Any]]:
         """Parse <tool_call> tags from model output."""
         tool_calls = []
-        pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
-        matches = re.findall(pattern, content, re.DOTALL)
-        
+        pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
+        matches = re.findall(pattern, content or "", re.DOTALL)
+
         for i, match in enumerate(matches):
             try:
                 tool_call_data = json.loads(match)
-                tool_calls.append({
-                    "id": f"call_{i}_{int(time.time()*1000)}",
-                    "name": tool_call_data.get("name"),
-                    "arguments": tool_call_data.get("arguments", {})
-                })
+                tool_calls.append(
+                    {
+                        "id": f"call_{i}_{int(time.time()*1000)}",
+                        "name": tool_call_data.get("name"),
+                        "arguments": tool_call_data.get("arguments", {}),
+                    }
+                )
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse tool call JSON: {match}, error: {e}")
                 continue
-        
+
         return tool_calls
 
-    def _format_tool_results(self, tool_results: List[Dict[str, Any]]) -> str:
-        """Format tool results for Hermes-style template."""
-        results_str = []
-        for result in tool_results:
-            results_str.append(f"{result['content']}")
-        return "\n".join(results_str)
+    def _normalize_media_id(self, media_id: Any) -> str:
+        if media_id is None:
+            return ""
+        mid = str(media_id).strip()
+        if mid.startswith("<") and mid.endswith(">") and len(mid) > 2:
+            mid = mid[1:-1].strip()
+        return mid
 
-    async def run(self, question: str, media_items: List[Union[str, Dict[str, str]]] = [], semaphore: Optional[asyncio.Semaphore] = None) -> Dict[str, Any]:
-        # logger.info(f"Starting Qwen Agent with question: {question}")
-        
-        # 1. Build Initial Content
+    def _parse_time_value(self, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            v = value.strip()
+            if not v or v.lower() in {"none", "null"}:
+                return None
+            if v.endswith("s"):
+                v = v[:-1].strip()
+            try:
+                return float(v)
+            except ValueError:
+                return None
+        return None
+
+    def _register_media_id(self, media_id: str, path: str, mapping: Dict[str, str]) -> None:
+        if not media_id:
+            return
+        if media_id not in mapping:
+            mapping[media_id] = path
+        if media_id.startswith(("image_", "audio_", "video_")):
+            stripped = media_id.split("_", 1)[1]
+            if stripped and stripped not in mapping:
+                mapping[stripped] = path
+
+    def _build_media_id_map(self, media_items: List[Union[str, Dict[str, Any]]]) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        for item in media_items:
+            if isinstance(item, dict):
+                path = item.get("path")
+            else:
+                path = item
+            if not path or self._is_url(path) or not os.path.exists(path):
+                continue
+            base = os.path.splitext(os.path.basename(path))[0]
+            self._register_media_id(base, path, mapping)
+            if isinstance(item, dict):
+                kind = item.get("type")
+                if kind:
+                    self._register_media_id(f"{kind}_{base}", path, mapping)
+        return mapping
+
+    def _resolve_media_path(self, media_id: str, media_id_to_path: Dict[str, str]) -> Optional[str]:
+        normalized = self._normalize_media_id(media_id)
+        if not normalized:
+            return None
+        mapped_path = media_id_to_path.get(normalized)
+        if mapped_path and os.path.exists(mapped_path):
+            return mapped_path
+        return self.info_manager.get_file_path(normalized)
+
+    def _detect_media_types(self, media_items: List[Union[str, Dict[str, Any]]]) -> Dict[str, bool]:
+        flags = {"image": False, "audio": False, "video": False}
+        for item in media_items:
+            if isinstance(item, dict):
+                path = item.get("path")
+                kind = item.get("type", "")
+            else:
+                path = item
+                kind = ""
+            if not path or self._is_url(path):
+                continue
+            if not kind:
+                if path.endswith((".mp4", ".mkv", ".avi", ".webm")):
+                    kind = "video"
+                elif path.endswith((".wav", ".mp3", ".flac", ".m4a")):
+                    kind = "audio"
+                else:
+                    kind = "image"
+            if kind in flags:
+                flags[kind] = True
+        return flags
+
+    def _build_active_perception_tools_schema(self, media_items: List[Union[str, Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        tools_schema = list(OPENAI_TOOLS_SCHEMA)
+        media_flags = self._detect_media_types(media_items)
+        if media_flags["video"]:
+            tools_schema.append(get_openai_function_read_video())
+        if media_flags["audio"]:
+            tools_schema.append(get_openai_function_read_audio())
+        if media_flags["image"]:
+            tools_schema.append(get_openai_function_read_image())
+        return tools_schema
+
+    def _compress_video_segment(
+        self,
+        video_path: str,
+        t_start: float,
+        t_end: float,
+        max_frames: int = 128,
+    ) -> Optional[Dict[str, Any]]:
+        if not os.path.exists(video_path):
+            return None
+
+        cap = None
+        temp_video_path = None
+        try:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if total_frames <= 0 or video_fps <= 0:
+                return None
+
+            start_frame = int(max(0.0, t_start) * video_fps)
+            end_frame = int(max(t_start, t_end) * video_fps)
+            end_frame = min(end_frame, total_frames)
+            if start_frame >= end_frame:
+                return None
+
+            seg_cnt = end_frame - start_frame
+            duration = seg_cnt / video_fps
+            target_fps = min(2.0, max_frames / duration) if duration > 0 else 2.0
+            nframes = int(duration * target_fps)
+            nframes = max(1, min(nframes, max_frames))
+            sample_indices = np.linspace(start_frame, end_frame - 1, nframes, dtype=int)
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(sample_indices[0]))
+            ret, frame = cap.read()
+            if not ret:
+                return None
+
+            height, width = frame.shape[:2]
+            new_height, new_width = smart_resize(
+                height, width, factor=28, min_pixels=16 * 16, max_pixels=256 * 256
+            )
+
+            fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
+            os.close(fd)
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(temp_video_path, fourcc, max(0.5, target_fps), (new_width, new_height))
+
+            for idx in sample_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                if new_height != height or new_width != width:
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+                out.write(frame)
+            out.release()
+
+            if not os.path.exists(temp_video_path) or os.path.getsize(temp_video_path) == 0:
+                return None
+
+            with open(temp_video_path, "rb") as f:
+                b64_video = base64.b64encode(f.read()).decode("utf-8")
+            return {"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{b64_video}"}}
+        except Exception as e:
+            logger.error(f"Failed to compress video segment {video_path}: {e}")
+            return None
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.remove(temp_video_path)
+                except Exception:
+                    pass
+
+    def _compress_audio_segment(self, audio_path: str, t_start: float, t_end: float) -> Optional[Dict[str, Any]]:
+        if AudioSegment is None:
+            return None
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio = audio.set_channels(1)
+            audio = audio.set_frame_rate(16000)
+
+            start_ms = int(max(0.0, t_start) * 1000)
+            end_ms = int(max(t_start, t_end) * 1000)
+            segment = audio[start_ms:end_ms]
+            if len(segment) > 300 * 1000:
+                segment = segment[: 300 * 1000]
+
+            buf = io.BytesIO()
+            segment.export(buf, format="mp3")
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            return self._build_part("audio", f"data:audio/mpeg;base64,{b64}")
+        except Exception as e:
+            logger.error(f"Audio compression failed for {audio_path}: {e}")
+            return None
+
+    async def _handle_active_perception_tool(
+        self,
+        fn_name: str,
+        fn_args: Dict[str, Any],
+        media_id_to_path: Dict[str, str],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        media_parts: List[Dict[str, Any]] = []
+
+        if fn_name == "read_video":
+            vid = self._normalize_media_id(fn_args.get("video_id"))
+            t_start = self._parse_time_value(fn_args.get("t_start")) or 0.0
+            t_end = self._parse_time_value(fn_args.get("t_end"))
+            path = self._resolve_media_path(vid, media_id_to_path)
+            if not path:
+                return {"status": "error", "message": f"Video {vid} not found."}, media_parts
+            if not path.endswith((".mp4", ".mkv", ".avi", ".webm")):
+                return {"status": "error", "message": f"Media {vid} is not a video file."}, media_parts
+
+            cap = cv2.VideoCapture(path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+            duration = total_frames / fps if fps > 0 else 0.0
+            if duration <= 0:
+                return {"status": "error", "message": f"Video {vid} has invalid metadata."}, media_parts
+
+            real_end = t_end if t_end is not None else duration
+            real_end = min(duration, max(t_start + 0.5, real_end))
+            if real_end <= t_start:
+                return {"status": "error", "message": "Invalid video segment range."}, media_parts
+
+            segment_part = self._compress_video_segment(path, t_start=t_start, t_end=real_end)
+            if not segment_part:
+                return {"status": "error", "message": "Could not extract video segment."}, media_parts
+
+            segment_id = f"{vid}_segment_{t_start:.2f}_{real_end:.2f}"
+            media_info = (
+                f"Media ID: {segment_id}\n"
+                f"Media Type: Video Segment\n"
+                f"Segment Duration: {real_end - t_start:.2f}s (from {t_start:.2f}s to {real_end:.2f}s)"
+            )
+            media_parts.extend([{"type": "text", "text": media_info}, segment_part])
+            return {
+                "status": "success",
+                "message": f"Video segment loaded. Assigned Media ID: {segment_id}",
+            }, media_parts
+
+        if fn_name == "read_audio":
+            aid = self._normalize_media_id(fn_args.get("audio_id"))
+            t_start = self._parse_time_value(fn_args.get("t_start")) or 0.0
+            t_end = self._parse_time_value(fn_args.get("t_end"))
+            path = self._resolve_media_path(aid, media_id_to_path)
+            if not path:
+                return {"status": "error", "message": f"Audio {aid} not found."}, media_parts
+            if not path.endswith((".wav", ".mp3", ".flac", ".m4a", ".mp4", ".mkv", ".avi", ".webm")):
+                return {"status": "error", "message": f"Media {aid} does not support audio reading."}, media_parts
+
+            real_end = t_end
+            if AudioSegment is not None:
+                try:
+                    audio_len_s = len(AudioSegment.from_file(path)) / 1000.0
+                    if real_end is None:
+                        real_end = audio_len_s
+                    real_end = min(audio_len_s, max(t_start + 0.5, real_end))
+                except Exception:
+                    if real_end is None:
+                        real_end = t_start + 30.0
+            else:
+                if real_end is None:
+                    real_end = t_start + 30.0
+            if real_end <= t_start:
+                return {"status": "error", "message": "Invalid audio segment range."}, media_parts
+
+            segment_part = self._compress_audio_segment(path, t_start=t_start, t_end=real_end)
+            if not segment_part:
+                return {"status": "error", "message": "Could not extract audio segment."}, media_parts
+
+            segment_id = f"{aid}_segment_{t_start:.2f}_{real_end:.2f}"
+            media_info = (
+                f"Media ID: {segment_id}\n"
+                f"Media Type: Audio Segment\n"
+                f"Segment Duration: {real_end - t_start:.2f}s (from {t_start:.2f}s to {real_end:.2f}s)"
+            )
+            media_parts.extend([{"type": "text", "text": media_info}, segment_part])
+            return {
+                "status": "success",
+                "message": f"Audio segment loaded. Assigned Media ID: {segment_id}",
+            }, media_parts
+
+        if fn_name == "read_image":
+            image_ids = fn_args.get("image_ids", [])
+            if isinstance(image_ids, str):
+                image_ids = [image_ids]
+            crop_box = fn_args.get("crop_box")
+            if not isinstance(crop_box, list) or len(crop_box) != 4:
+                crop_box = None
+
+            loaded_ids = []
+            for iid in image_ids:
+                iid = self._normalize_media_id(iid)
+                path = self._resolve_media_path(iid, media_id_to_path)
+                if not path:
+                    continue
+                img = cv2.imread(path)
+                if img is None:
+                    continue
+                h, w = img.shape[:2]
+                detail_id = f"{iid}_detail"
+                type_desc = "Image Detail"
+
+                if crop_box:
+                    x1, y1, x2, y2 = [int(v) for v in crop_box]
+                    x1 = max(0, min(x1, w))
+                    x2 = max(0, min(x2, w))
+                    y1 = max(0, min(y1, h))
+                    y2 = max(0, min(y2, h))
+                    if x2 > x1 and y2 > y1:
+                        img = img[y1:y2, x1:x2]
+                        h, w = img.shape[:2]
+                        detail_id = f"{iid}_crop_{x1}_{y1}_{x2}_{y2}"
+                        type_desc = f"Image Crop (Box: {x1},{y1},{x2},{y2})"
+
+                ok, buf = cv2.imencode(".jpg", img)
+                if not ok:
+                    continue
+                b64 = base64.b64encode(buf).decode("utf-8")
+                image_part = self._build_part("image", f"data:image/jpeg;base64,{b64}")
+                if not image_part:
+                    continue
+
+                media_info = f"Media ID: {detail_id}\nMedia Type: {type_desc}\nResolution: {w}x{h}"
+                media_parts.extend([{"type": "text", "text": media_info}, image_part])
+                loaded_ids.append(detail_id)
+
+            if loaded_ids:
+                return {
+                    "status": "success",
+                    "message": f"Images loaded. Assigned Media IDs: {loaded_ids}",
+                }, media_parts
+            return {"status": "error", "message": "No images found."}, media_parts
+
+        return {"status": "error", "message": f"Unsupported active perception tool: {fn_name}"}, media_parts
+
+    async def run(
+        self,
+        question: str,
+        media_items: List[Union[str, Dict[str, str]]] = [],
+        semaphore: Optional[asyncio.Semaphore] = None,
+    ) -> Dict[str, Any]:
         content_parts = []
-        
+        media_id_to_path = self._build_media_id_map(media_items)
+
         for item in media_items:
             path = item
             kind = "image"
-            
+
             if isinstance(item, dict):
                 path = item.get("path")
                 t = item.get("type", "image")
-                if t == "video": kind = "video"
-                elif t == "audio": kind = "audio"
-                else: kind = "image"
-            else:
-                # Determine kind based on extension
-                if path.endswith(('.mp4', '.mkv', '.avi', '.webm')):
+                if t == "video":
                     kind = "video"
-                elif path.endswith(('.wav', '.mp3', '.flac', '.m4a')):
+                elif t == "audio":
                     kind = "audio"
-            
+                else:
+                    kind = "image"
+            else:
+                if path.endswith((".mp4", ".mkv", ".avi", ".webm")):
+                    kind = "video"
+                elif path.endswith((".wav", ".mp3", ".flac", ".m4a")):
+                    kind = "audio"
+
             if path:
                 part = self._build_part(kind, path)
                 if part:
@@ -850,16 +1302,19 @@ For each function call, return a JSON object with function name and arguments wi
 
         if question:
             content_parts.append({"type": "text", "text": question})
-        
-        # embed tools in system prompt
-        system_content = SYSTEM_PROMPT + "\n\n" + self._build_tools_prompt()
-        
-        # Convert system content to list format to avoid "can only concatenate list (not "str") to list" error
+
+        tools_schema = OPENAI_TOOLS_SCHEMA
+        system_prompt = SYSTEM_PROMPT
+        if self.enable_active_perception:
+            tools_schema = self._build_active_perception_tools_schema(media_items)
+            system_prompt = f"{SYSTEM_PROMPT}\n\n{ACTIVE_PERCEPTION_PROMPT_NOTE}"
+
+        system_content = system_prompt + "\n\n" + self._build_tools_prompt(tools_schema)
         messages = [
             {"role": "system", "content": [{"type": "text", "text": system_content}]},
-            {"role": "user", "content": content_parts}
+            {"role": "user", "content": content_parts},
         ]
-        
+
         max_turns = 50
         current_turn = 0
         all_tool_calls = []
@@ -867,29 +1322,32 @@ For each function call, return a JSON object with function name and arguments wi
         while current_turn < max_turns:
             current_turn += 1
             logger.info(f"Turn {current_turn}...")
-            
+
             try:
-                # Use manual Hermes-style tool calling
-                response = await self._run_with_tools(messages, semaphore, all_tool_calls)
+                response = await self._run_with_tools(messages, semaphore, all_tool_calls, media_id_to_path)
                 if response is not None:
                     response["messages"] = messages
                     return response
                 continue
-
             except Exception as e:
                 logger.error(f"Error in Qwen run loop: {e}")
                 return {"output": f"Error: {str(e)}", "tool_calls": all_tool_calls, "messages": messages}
-        
+
         return {"output": "Max turns reached.", "tool_calls": all_tool_calls, "messages": messages}
 
-    async def _run_with_tools(self, messages: List[Dict], semaphore: Optional[asyncio.Semaphore], all_tool_calls: List) -> Optional[Dict[str, Any]]:
+    async def _run_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        semaphore: Optional[asyncio.Semaphore],
+        all_tool_calls: List[Dict[str, Any]],
+        media_id_to_path: Dict[str, str],
+    ) -> Optional[Dict[str, Any]]:
         """
         Run with manual Hermes-style tool calling (no tools parameter).
         Returns None to continue the loop, or a result dict to finish.
         """
+
         async def _do_request():
-            # NOTE: Removed tools=OPENAI_TOOLS_SCHEMA and tool_choice="auto" to prevent server-side injection issues.
-            # We are manually injecting tools via system prompt.
             return await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -898,12 +1356,11 @@ For each function call, return a JSON object with function name and arguments wi
                 temperature=0.6,
                 top_p=0.95,
                 extra_body={
-                    'top_k': 20,
-                    # 'include_stop_str_in_output': True,
-                    'repetition_penalty': 1.05,
+                    "top_k": 20,
+                    "repetition_penalty": 1.05,
                 },
             )
-        
+
         if semaphore:
             async with semaphore:
                 response = await _do_request()
@@ -911,127 +1368,110 @@ For each function call, return a JSON object with function name and arguments wi
             response = await _do_request()
 
         usage_info = None
-        if hasattr(response, 'usage') and response.usage:
-             u = response.usage
-             usage_info = {
-                 "completion_tokens": u.completion_tokens,
-                 "prompt_tokens": u.prompt_tokens,
-                 "total_tokens": u.total_tokens
-             }
-             logger.info(f"Token Usage: {usage_info}")
-        
+        if hasattr(response, "usage") and response.usage:
+            usage_info = {
+                "completion_tokens": response.usage.completion_tokens,
+                "prompt_tokens": response.usage.prompt_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            logger.info(f"Token Usage: {usage_info}")
+
         content = response.choices[0].message.content or ""
-        
-        # Check for reasoning_content (often used by reasoning models)
-        # Some compatible APIs (like DeepSeek) might return reasoning_content
         reasoning_content = getattr(response.choices[0].message, "reasoning_content", None)
         if reasoning_content:
-             formatted_reasoning = f"<think>{reasoning_content}</think>\n"
-             content = formatted_reasoning + content
+            content = f"<think>{reasoning_content}</think>\n" + content
 
-        # Keep <think> tags for logging, just strip whitespace
         cleaned_content = content.strip()
-        
-        # Parse tool calls from content
         tool_calls = self._parse_tool_calls(content)
-        
+
         if tool_calls:
             logger.info(f"Parsed {len(tool_calls)} tool calls from response")
-            
-            # Add assistant message (normalized to list)
-            asst_msg = {
-                "role": "assistant", 
-                "content": [{"type": "text", "text": content}]
-            }
+            asst_msg = {"role": "assistant", "content": [{"type": "text", "text": content}]}
             if usage_info:
                 asst_msg["usage"] = usage_info
             messages.append(asst_msg)
-            
-            # Execute tools in parallel
-            async def execute_tool(tc):
-                fn_name = tc["name"]
-                fn_args = tc["arguments"]
+
+            async def execute_tool(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+                fn_name = tc.get("name")
+                fn_args = tc.get("arguments", {})
                 logger.info(f"Executing tool: {fn_name} with args: {fn_args}")
-                
+
+                args_to_pass = fn_args
+                if isinstance(args_to_pass, str):
+                    try:
+                        args_to_pass = json.loads(args_to_pass)
+                    except Exception:
+                        args_to_pass = {}
+                if not isinstance(args_to_pass, dict):
+                    args_to_pass = {}
+
+                if not fn_name:
+                    return {"name": "unknown", "content": json.dumps({"error": "Missing tool name"}, ensure_ascii=False)}, []
+
+                if self.enable_active_perception and fn_name in {"read_video", "read_audio", "read_image"}:
+                    tool_result, media_parts = await self._handle_active_perception_tool(
+                        fn_name, args_to_pass, media_id_to_path
+                    )
+                    return {"name": fn_name, "content": json.dumps(tool_result, ensure_ascii=False)}, media_parts
+
                 tool_result = {}
                 max_tool_retries = 3
-
                 if hasattr(self.tools, fn_name):
                     tool_func = getattr(self.tools, fn_name)
-                    
-                    # Prepare args once if possible, or handle inside loop safely
-                    args_to_pass = fn_args
-                    if isinstance(args_to_pass, str):
-                        try:
-                            args_to_pass = json.loads(args_to_pass)
-                        except:
-                            pass # Let the tool function handle or fail
-
                     for attempt in range(max_tool_retries):
                         try:
-                            # Re-parsing inside loop in original code was: if isinstance(fn_args, str): fn_args = json.loads(fn_args)
-                            # We use prepared args
-                            if isinstance(args_to_pass, str):
-                                # Try parsing again if it failed before? No, just pass as is or dict
-                                pass
-                                
                             tool_result = await tool_func(**args_to_pass)
                             if not tool_result and attempt < max_tool_retries - 1:
-                                logger.warning(f"Tool {fn_name} returned empty result (Attempt {attempt+1}). Retrying...")
+                                logger.warning(
+                                    f"Tool {fn_name} returned empty result (Attempt {attempt+1}). Retrying..."
+                                )
                                 await asyncio.sleep(1)
                                 continue
                             break
                         except Exception as e:
-                             if attempt < max_tool_retries - 1:
+                            if attempt < max_tool_retries - 1:
                                 logger.warning(f"Tool {fn_name} failed (Attempt {attempt+1}): {e}. Retrying...")
                                 await asyncio.sleep(1)
-                             else:
+                            else:
                                 tool_result = {"error": str(e)}
                 else:
                     tool_result = {"error": f"Tool {fn_name} not found."}
-                
-                return {
-                    "name": fn_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
-                }
-            
-            tool_results = await asyncio.gather(*[execute_tool(tc) for tc in tool_calls])
-            
-            # Record tool calls
+
+                return {"name": fn_name, "content": json.dumps(tool_result, ensure_ascii=False)}, []
+
+            tool_exec_results = await asyncio.gather(*[execute_tool(tc) for tc in tool_calls])
+
             for tc in tool_calls:
-                all_tool_calls.append({
-                    "id": tc["id"],
-                    "function": {
-                        "name": tc["name"],
-                        "arguments": json.dumps(tc["arguments"]) if isinstance(tc["arguments"], dict) else tc["arguments"]
+                all_tool_calls.append(
+                    {
+                        "id": tc["id"],
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["arguments"]) if isinstance(tc["arguments"], dict) else tc["arguments"],
+                        },
                     }
-                })
-            
-            # Add tool results as user message (normalized to list)
-            tool_results_str = self._format_tool_results(tool_results)
-            messages.append({
-                "role": "tool", 
-                "content": [{"type": "text", "text": tool_results_str}]
-            })
-            
-            return None  # Continue the loop
-        else:
-            # No tool calls, return final answer
-            # Return full content including <think> tags as requested
-            if content:
-                log_content = re.sub(r'<think>.*?</think>', '', cleaned_content, flags=re.DOTALL).strip()
-                logger.info(f"Final Answer: {log_content}")
-                # Add assistant message to history before returning
-                asst_msg = {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": content}]
-                }
-                if usage_info:
-                    asst_msg["usage"] = usage_info
-                messages.append(asst_msg)
-                return {"output": content, "tool_calls": all_tool_calls}
-            else:
-                return {"output": "Error: Empty response from model.", "tool_calls": all_tool_calls}
+                )
+
+            tool_content_parts: List[Dict[str, Any]] = []
+            for tool_result, media_parts in tool_exec_results:
+                tool_content_parts.append({"type": "text", "text": tool_result["content"]})
+                if media_parts:
+                    tool_content_parts.extend(media_parts)
+            if not tool_content_parts:
+                tool_content_parts = [{"type": "text", "text": "{}"}]
+
+            messages.append({"role": "tool", "content": tool_content_parts})
+            return None
+
+        if content:
+            log_content = re.sub(r"<think>.*?</think>", "", cleaned_content, flags=re.DOTALL).strip()
+            logger.info(f"Final Answer: {log_content}")
+            asst_msg = {"role": "assistant", "content": [{"type": "text", "text": content}]}
+            if usage_info:
+                asst_msg["usage"] = usage_info
+            messages.append(asst_msg)
+            return {"output": content, "tool_calls": all_tool_calls}
+        return {"output": "Error: Empty response from model.", "tool_calls": all_tool_calls}
 
     async def close(self):
         await self.client.close()
@@ -1356,6 +1796,11 @@ async def main():
     parser.add_argument('--level', type=str, default=None, help="Filter items by difficulty level (Easy, Medium, Hard)")
     parser.add_argument('--model_name', type=str, help="Model Name")
     parser.add_argument('--use_asr', action='store_true', help="Use ASR to convert audio/video audio to text input")
+    parser.add_argument(
+        "--enable-active-perception",
+        action="store_true",
+        help="Enable read_video/read_audio/read_image active-perception tools for Qwen models.",
+    )
     
     args = parser.parse_args()
     
@@ -1388,6 +1833,9 @@ async def main():
     if args.max_items:
         items = items[:args.max_items]
 
+    if args.enable_active_perception and "qwen" not in args.model_name.lower():
+        logger.warning("--enable-active-perception is currently only supported in QwenBaseAgent. Ignoring for non-Qwen models.")
+
     semaphore = asyncio.Semaphore(args.concurrent_limit)
     
     # Create agents pool
@@ -1400,7 +1848,8 @@ async def main():
             agent = QwenBaseAgent(
                 api_key=key, 
                 model=args.model_name, 
-                api_base_url=args.api_base_url
+                api_base_url=args.api_base_url,
+                enable_active_perception=args.enable_active_perception,
             )
         else:
             agent = GeminiBaseAgent(

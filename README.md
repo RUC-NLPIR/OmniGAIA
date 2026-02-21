@@ -1,4 +1,6 @@
-<h1 align="center">OmniGAIA<br><small>Towards Native Omni-Modal AI Agents</small></h1>
+<h1 style="text-align: center; font-size: 1.8em; margin-bottom: 0.75em;">
+  <span style="color:#1628a7; font-weight:bold;">O</span><span style="color:#402b94; font-weight:bold;">m</span><span style="color:#673ea0; font-weight:bold;">n</span><span style="color:#8b16aa; font-weight:bold;">i</span>GAIA: Towards Native Omni-Modal AI Agents
+</h1>
 
 <div align="center">
 
@@ -11,7 +13,20 @@
   <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=20&duration=3000&pause=1000&color=005DE3&center=true&vCenter=true&width=800&lines=OmniGAIA:+A+Benchmark+for+Omni-Modal+General+AI+Assistants;OmniAtlas:+A+Reasoning+Agent+with+Active+Perception" alt="Typing Animation" />
 </div>
 
+## 🎬 Demo
 
+#### Agentic Reasoning on "Image + Audio" Scenario
+
+<div align="center">
+  <video src="./assets/demo_image_audio.mp4" />
+</div>
+
+
+#### Agentic Reasoning on "Video w/ Audio" Scenario
+
+<div align="center">
+  <video src="./assets/demo_video.mp4" />
+</div>
 
 ## 💡 Overview
 
@@ -67,35 +82,6 @@ The OmniGAIA construction pipeline consists of four stages:
 OmniAtlas is trained in two stages:
 1. **Trajectory Synthesis & Supervised Learning** — Gemini-3 provides step supervision while DeepSeek-V3.2 performs tool-augmented reasoning. Successful trajectories are used for SFT.
 2. **OmniDPO: Fine-Grained Error Correction** — Gemini-3 identifies and corrects errors in failed trajectories across perception, reasoning, and tool-use dimensions, producing preference pairs for DPO training.
-
-
-
-## 📁 Project Structure
-
-```
-OmniGAIA-Anon/
-├── assets/                          # Figures for documentation
-├── data/                            # Benchmark data (JSON + media files)
-│   ├── video/                       # Video files (.mp4, .mkv, …)
-│   ├── audio/                       # Audio files (.wav, .mp3, …)
-│   └── image/                       # Image files (.jpg, .png, …)
-├── outputs/                         # Agent output results
-├── src/
-│   ├── tools/                       # External tool implementations
-│   │   ├── __init__.py
-│   │   ├── web_tools.py             # Web search, page browsing, image search
-│   │   └── code_executor.py         # Sandboxed Python code execution
-│   ├── evaluate/
-│   │   ├── __init__.py
-│   │   └── eval_results.py          # Re-evaluate results with LLM equivalence
-│   ├── prompts/                     # Prompt templates
-│   ├── run_base_agent.py            # Baseline agent (Gemini / Qwen)
-│   └── run_omni_atlas.py            # OmniAtlas agent with active perception
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-
 
 
 ## 🔧 Installation
