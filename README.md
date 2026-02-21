@@ -15,21 +15,25 @@
 
 ## 🎬 Demo
 
+*Note: If demo videos cannot be displayed on Anonymous GitHub, you can download them and view locally.*
+
 ### Agentic Reasoning on "Image + Audio" Scenario
 
+
 <div align="center">
-  <video controls width="95%">
-    <source src="./assets/demo_image_audio.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
+  <video src="https://github.com/user-attachments/assets/e5778d63-bc82-485d-8eef-f3aaa1a85dba" />
 </div>
 
 
 ### Agentic Reasoning on "Video w/ Audio" Scenario
 
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/df9f8619-6c45-462f-a809-5ffba2a82bd4" />
+  <video src="https://github.com/user-attachments/assets/29fc2487-1240-4108-89e3-190677b40b22" />
 </div>
+
+
+
+
 
 
 ## 💡 Overview
