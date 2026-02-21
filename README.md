@@ -28,10 +28,7 @@
 ### Agentic Reasoning on "Video w/ Audio" Scenario
 
 <div align="center">
-  <video controls width="95%">
-    <source src="https://github.com/user-attachments/assets/df9f8619-6c45-462f-a809-5ffba2a82bd4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
+  <video src="https://github.com/user-attachments/assets/df9f8619-6c45-462f-a809-5ffba2a82bd4" />
 </div>
 
 
