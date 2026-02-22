@@ -1,6 +1,7 @@
-<div align="center">
+<h1 align="center">
   <img src="./assets/title.svg" alt="OmniGAIA: Towards Native Omni-Modal AI Agents" />
-</div>
+</h1>
+
 
 <div align="center">
 
