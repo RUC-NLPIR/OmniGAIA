@@ -1,6 +1,6 @@
-<h1 style="text-align: center; font-size: 1.8em; margin-bottom: 0.75em;">
-  <span style="color:#1628a7; font-weight:bold;">O</span><span style="color:#402b94; font-weight:bold;">m</span><span style="color:#673ea0; font-weight:bold;">n</span><span style="color:#8b16aa; font-weight:bold;">i</span>GAIA: Towards Native Omni-Modal AI Agents
-</h1>
+<div align="center">
+  <img src="./assets/title.svg" alt="OmniGAIA: Towards Native Omni-Modal AI Agents" />
+</div>
 
 <div align="center">
 
