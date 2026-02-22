@@ -1,6 +1,5 @@
-<h1 align="center">
-  <img src="./assets/title.svg" alt="OmniGAIA: Towards Native Omni-Modal AI Agents" />
-</h1>
+<h1 align="center"> 🚀 OmniGAIA: Towards Native Omni-Modal AI Agents</a></h1>
+
 
 
 <div align="center">
@@ -51,6 +50,12 @@ We also introduce **OmniAtlas**, an agentic reasoning system that extends a base
 - **OmniAtlas Agent:** A fine-tuned agent with active perception capabilities and preference learning via OmniDPO.
 - **Multi-Dimensional Evaluation:** Tasks are categorised by difficulty (Easy / Medium / Hard) and domain, with both exact-match and LLM-based equivalence metrics.
 
+### 🎯 Task Examples
+
+<div align="center">
+  <img src="./assets/omnigaia_examples.png" width="95%" />
+</div>
+
 ### 📊 Benchmark Construction
 
 <div align="center">
@@ -75,12 +80,6 @@ The OmniGAIA construction pipeline consists of four stages:
 - **Median video duration:** 242.2s | **Median audio duration:** 197.0s
 - **99.7%** of tasks require visual perception; **99.7%** require audio perception
 - **98.6%** require web search; **74.4%** require code / computation
-
-### 🎯 Task Examples
-
-<div align="center">
-  <img src="./assets/omnigaia_examples.png" width="95%" />
-</div>
 
 ### 🤖 OmniAtlas Training Pipeline
 
