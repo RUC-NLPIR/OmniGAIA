@@ -1,0 +1,24 @@
+{
+  "evaluation": {
+    "base_url": "http://localhost:8089/v1",
+    "api_key": "empty",
+    "model": "deepseek-v3.2"
+  },
+  "web_tools": {
+    "serper_api_key": "",
+    "jina_api_key": ""
+  },
+  "paths": {
+    "data_root": "./data",
+    "image_save_dir": "./cache/searched_images",
+    "web_cache_dir": "./cache",
+    "code_files_output_dir": "./outputs/code_files"
+  },
+  "data": {
+    "media_dirs": {
+      "video": ["videos", "video"],
+      "audio": ["audios", "audio"],
+      "image": ["images", "image"]
+    }
+  }
+}
