@@ -27,10 +27,8 @@
 
 
 <div align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=20&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Next-Gen+Omni-Modal+AI+Agent+Benchmark;Powered+by+RUC-NLPIR+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
+  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=18&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Towards+Next-Gen+Omni-Modal+AI+Agent;Powered+by+RUC-NLPIR+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
 </div>
-
-
 
 
 
