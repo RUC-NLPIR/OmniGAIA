@@ -153,15 +153,11 @@ pip install -r requirements.txt
 
 ### Configuration File
 
-All runtime configuration is managed via `config/config.json`, 其中你需要设置：
-- Main agent endpoint (`evaluation.base_url`, `evaluation.api_key`, `evaluation.model`)
+All runtime configuration is managed via `config/config.json`, where you need to set:
+- Main agent endpoint (`agent.api_base_url`, `agent.api_key`, `agent.model_name`)
+- Evaluation LLM endpoint (`evaluation.base_url`, `evaluation.api_key`, `evaluation.model`)
 - Web search API key (`web_tools.serper_api_key`)
 - Jina API key (`web_tools.jina_api_key`)
-- Data root path (`paths.data_root`)
-- Image save directory (`paths.image_save_dir`)
-- Web cache directory (`paths.web_cache_dir`)
-- Relative paths in config are resolved from the repository root.
-
 
 
 ## 🏃 Quick Start
@@ -221,7 +217,7 @@ python src/run_base_agent.py \
 python src/run_base_agent.py \
     --input_file ./data/test_metadata.json \
     --api_base_url "http://localhost:8000/v1" \
-    --model_name "qwen3-omni-30b" \
+    --model_name "qwen3-omni-30b-a3b-thinking" \
     --api_key "empty" \
     --concurrent_limit 16
 ```
