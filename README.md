@@ -34,14 +34,6 @@
 
 
 
-## 📣 Latest News
-
-- **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.xxxxx)** and **[Hugging Face](https://huggingface.co/papers/2602.xxxxx)**.
-- **[Feb 27, 2026]**: 📈 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
-- **[Feb 27, 2026]**: 🚀 Full codebase released. You can now deploy omni-modal AI agents for images, audio, and video, along with research tools.
-
-
-
 
 
 ## 🎬 Demo
@@ -60,6 +52,14 @@
   <video src="https://github.com/user-attachments/assets/29fc2487-1240-4108-89e3-190677b40b22" />
 </div>
 
+
+
+
+## 📣 Latest News
+
+- **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.xxxxx)** and **[Hugging Face](https://huggingface.co/papers/2602.xxxxx)**.
+- **[Feb 27, 2026]**: 📈 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
+- **[Feb 27, 2026]**: 🚀 Full codebase released. You can now deploy omni-modal AI agents for images, audio, and video, along with research tools.
 
 
 
