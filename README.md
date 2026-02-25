@@ -238,13 +238,14 @@ python src/run_base_agent.py \
 | `--level` | Filter by difficulty: `Easy`, `Medium`, or `Hard` |
 | `--max_items` | Limit the number of items to process |
 | `--concurrent_limit` | Maximum concurrent API calls (default: 5) |
+| `--max_action_limit` | Maximum number of tool-call turns before forced final answer (default: 50) |
 | `--use_asr` | Use Whisper ASR to convert audio to text (for text-only models) |
 | `--enable-active-perception` | Enable `read_video` / `read_audio` / `read_image` tools (Qwen/OmniAtlas models only) |
 | `--output_dir` | Directory for results (default: `./outputs`) |
 | `--request_timeout` | Per-request timeout in seconds (default: 600) |
 | `--forced_final_timeout` | Timeout for forced final answer after max turns (default: 300) |
 | `--ffmpeg_timeout` | Timeout for ffmpeg-related media processing (default: 180) |
-| `--item_timeout` | Max total processing time per item (default: 1800) |
+| `--item_timeout` | Max total processing time (default: 36000 (10 hours)) |
 | `--eval_timeout` | Timeout for LLM equivalence evaluation (default: 120) |
 | `--skip_eval` | Skip LLM-based equivalence evaluation |
 

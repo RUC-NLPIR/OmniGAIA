@@ -28,12 +28,13 @@
     "level": null,
     "max_items": null,
     "concurrent_limit": 5,
+    "max_action_limit": 50,
     "use_asr": false,
     "output_dir": "./outputs",
     "request_timeout": 600,
     "forced_final_timeout": 300,
     "ffmpeg_timeout": 180,
-    "item_timeout": 1800,
+    "item_timeout": 36000,
     "eval_timeout": 120,
     "skip_eval": false
   }

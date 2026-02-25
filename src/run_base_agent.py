@@ -361,12 +361,14 @@ class GeminiBaseAgent:
         request_timeout: int = 600,
         forced_final_timeout: int = 300,
         ffmpeg_timeout: int = 180,
+        max_action_limit: int = 50,
     ):
         self.api_key = api_key
         self.model = model
         self.request_timeout = request_timeout
         self.forced_final_timeout = forced_final_timeout
         self.ffmpeg_timeout = ffmpeg_timeout
+        self.max_action_limit = max(1, int(max_action_limit))
         # Disable proxy by setting trust_env=False to ignore HTTP_PROXY/HTTPS_PROXY environment variables
         self.http_client = httpx.AsyncClient(timeout=3600, trust_env=False)
         self.request_url = api_base_url
@@ -803,8 +805,8 @@ class GeminiBaseAgent:
         try:
             # History maintains the conversation state
             
-            # Max turns to prevent infinite loops
-            max_turns = 50
+            # Max tool-call turns to prevent infinite loops
+            max_turns = self.max_action_limit
             current_turn = 0
             
             all_tool_calls = []
@@ -918,6 +920,7 @@ class QwenBaseAgent:
         request_timeout: int = 600,
         forced_final_timeout: int = 300,
         ffmpeg_timeout: int = 180,
+        max_action_limit: int = 50,
     ):
         self.api_key = api_key
         self.model = model
@@ -926,6 +929,7 @@ class QwenBaseAgent:
         self.request_timeout = request_timeout
         self.forced_final_timeout = forced_final_timeout
         self.ffmpeg_timeout = ffmpeg_timeout
+        self.max_action_limit = max(1, int(max_action_limit))
         if AsyncOpenAI is None:
             raise ImportError("openai package is required for QwenBaseAgent")
         self.client = AsyncOpenAI(api_key=api_key, base_url=api_base_url)
@@ -1396,7 +1400,7 @@ For each function call, return a JSON object with function name and arguments wi
             {"role": "user", "content": content_parts},
         ]
 
-        max_turns = 50
+        max_turns = self.max_action_limit
         current_turn = 0
         all_tool_calls = []
 
@@ -1932,6 +1936,7 @@ async def main():
     parser.add_argument("--request_timeout", type=int, default=None, help="Per-request timeout in seconds (default: 600)")
     parser.add_argument("--forced_final_timeout", type=int, default=None, help="Timeout for forced final answer after max turns (default: 300)")
     parser.add_argument("--ffmpeg_timeout", type=int, default=None, help="Timeout for ffmpeg-related media processing in seconds (default: 180)")
+    parser.add_argument("--max_action_limit", type=int, default=None, help="Maximum number of tool-call turns before forced final answer (default: 50)")
     parser.add_argument("--item_timeout", type=int, default=None, help="Max total processing time per item in seconds (default: 1800)")
     parser.add_argument("--eval_timeout", type=int, default=None, help="Timeout for LLM equivalence evaluation in seconds (default: 120)")
     parser.add_argument("--skip_eval", action="store_true", default=False, help="Skip LLM-based equivalence evaluation")
@@ -1967,53 +1972,12 @@ async def main():
     args.request_timeout     = _resolve(args.request_timeout,     "request_timeout",     600)
     args.forced_final_timeout = _resolve(args.forced_final_timeout, "forced_final_timeout", 300)
     args.ffmpeg_timeout      = _resolve(args.ffmpeg_timeout,      "ffmpeg_timeout",      180)
+    args.max_action_limit    = _resolve(args.max_action_limit,    "max_action_limit",    50)
     args.item_timeout        = _resolve(args.item_timeout,        "item_timeout",        1800)
     args.eval_timeout        = _resolve(args.eval_timeout,        "eval_timeout",        120)
     # Boolean flags: True on CLI always wins; otherwise fall back to config value.
     args.use_asr  = args.use_asr  or bool(_agent_cfg.get("use_asr",  False))
     args.skip_eval = args.skip_eval or bool(_agent_cfg.get("skip_eval", False))
-
-    data_root = APP_CONFIG.get("paths", {}).get("data_root")
-
-    def _resolve_media_path(path_value: Optional[str], input_file_path: Optional[str]) -> Optional[str]:
-        """Resolve relative media paths against cwd/data_root/input_file dir.
-
-        For omni_modal_input, metadata often stores paths like "videos/xxx.mp4".
-        We keep backward compatibility by trying multiple candidates, but prefer
-        existing files first.
-        """
-        if not isinstance(path_value, str):
-            return path_value
-
-        source = path_value.strip()
-        if not source:
-            return source
-        if source.startswith(("http://", "https://", "data:")):
-            return source
-        if os.path.isabs(source):
-            return source
-
-        candidates: List[str] = [source]
-
-        if isinstance(data_root, str) and data_root.strip():
-            candidates.append(os.path.join(data_root, source))
-
-        if input_file_path:
-            input_dir = os.path.dirname(os.path.abspath(input_file_path))
-            candidates.append(os.path.join(input_dir, source))
-
-        for candidate in candidates:
-            if os.path.exists(candidate):
-                return candidate
-
-        if isinstance(data_root, str) and data_root.strip():
-            return os.path.join(data_root, source)
-
-        if input_file_path:
-            input_dir = os.path.dirname(os.path.abspath(input_file_path))
-            return os.path.join(input_dir, source)
-
-        return source
     
     if not args.input_file:  
         print("Please provide an input file using --input_file")
@@ -2067,6 +2031,7 @@ async def main():
                 request_timeout=args.request_timeout,
                 forced_final_timeout=args.forced_final_timeout,
                 ffmpeg_timeout=args.ffmpeg_timeout,
+                max_action_limit=args.max_action_limit,
             )
         else:
             agent = GeminiBaseAgent(
@@ -2076,6 +2041,7 @@ async def main():
                 request_timeout=args.request_timeout,
                 forced_final_timeout=args.forced_final_timeout,
                 ffmpeg_timeout=args.ffmpeg_timeout,
+                max_action_limit=args.max_action_limit,
             )
         agents.append(agent)
     
@@ -2091,6 +2057,19 @@ async def main():
             print(f"Failed to load Whisper model: {e}")
             sys.exit(1)
 
+    data_root = APP_CONFIG["paths"]["data_root"]
+
+    def _resolve_omni_path(path: str) -> str:
+        """Resolve omni_modal_input paths against data_root when needed."""
+        if not path or os.path.isabs(path) or path.startswith(("http://", "https://", "data:")):
+            return path
+        resolved = os.path.join(data_root, path)
+        if os.path.exists(resolved):
+            return resolved
+        if os.path.exists(path):
+            return path
+        return resolved
+
     # Pre-process all audio with ASR if enabled
     if asr_manager:
         logger.info("Pre-processing audio files with ASR...")
@@ -2101,9 +2080,7 @@ async def main():
                 for inp in item["omni_modal_input"]:
                     path = inp.get("path") if isinstance(inp, dict) else inp
                     if path:
-                        resolved_path = _resolve_media_path(path, args.input_file)
-                        if resolved_path:
-                            all_audio_paths.add(resolved_path)
+                        all_audio_paths.add(_resolve_omni_path(path))
             else:
                 # Fallback to OmniInfoManager
                 paths = omni_manager.get_file_paths_for_item(item)
@@ -2139,12 +2116,10 @@ async def main():
         
         # 1. Check for omni_modal_input (New Format)
         if "omni_modal_input" in item and item["omni_modal_input"]:
-             # Use the provided list of dicts directly
              for inp in item["omni_modal_input"]:
                  if "path" in inp:
-                    normalized_inp = dict(inp)
-                    normalized_inp["path"] = _resolve_media_path(inp.get("path"), args.input_file)
-                    media_items.append(normalized_inp)
+                     resolved = {**inp, "path": _resolve_omni_path(inp["path"])}
+                     media_items.append(resolved)
         else:
             # Fallback to old logic (OmniInfoManager)
             paths = omni_manager.get_file_paths_for_item(item)
@@ -2155,7 +2130,7 @@ async def main():
              file_paths = []
              for f in item["file_input"]:
                  if "path" in f:
-                     file_paths.append(f["path"])
+                     file_paths.append(_resolve_omni_path(f["path"]))
              
              if file_paths:
                  # Append to question
