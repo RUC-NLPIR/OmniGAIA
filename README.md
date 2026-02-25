@@ -71,13 +71,13 @@
 
 We also introduce **OmniAtlas**, an agentic reasoning system that extends a base LLM with *active perception* tools, enabling the model to request and examine additional media segments during multi-step reasoning.
 
-### ✨ Key Highlights
+<!-- ### ✨ Key Highlights
 
 - **Omni-Modal Benchmark:** 360 human-verified QA pairs spanning 9 domains, requiring joint understanding of video, audio, and image content.
 - **Agentic Event-Graph Construction:** A novel pipeline that builds structured event graphs from multi-modal sources using Gemini-3-Flash and DeepSeek-V3.2 with tool-augmented reasoning.
 - **External Tool Integration:** Agents are equipped with web search & browsing, code execution, and cross-modal retrieval tools.
 - **OmniAtlas Agent:** A fine-tuned agent with active perception capabilities and preference learning via OmniDPO.
-- **Multi-Dimensional Evaluation:** Tasks are categorised by difficulty (Easy / Medium / Hard) and domain, with both exact-match and LLM-based equivalence metrics.
+- **Multi-Dimensional Evaluation:** Tasks are categorised by difficulty (Easy / Medium / Hard) and domain, with both exact-match and LLM-based equivalence metrics. -->
 
 ### 🎯 Task Examples
 
