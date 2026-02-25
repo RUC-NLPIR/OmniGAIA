@@ -103,11 +103,10 @@ The OmniGAIA construction pipeline consists of four stages:
   <img src="./assets/omnigaia_statistics.png" width="95%" />
 </div>
 
-**Key numbers:**
+**Core statistics:**
 - **360** QA pairs across **9** domains (Geography, History, Technology, Sports, Arts, Movies, Science, Finance, Food)
 - **3** difficulty levels — Easy (33.9%), Medium (44.4%), Hard (21.7%)
 - **Median video duration:** 242.2s | **Median audio duration:** 197.0s
-- **99.7%** of tasks require visual perception; **99.7%** require audio perception
 - **98.6%** require web search; **74.4%** require code / computation
 
 ### 🤖 OmniAtlas Training Pipeline
@@ -336,6 +335,22 @@ OmniGAIA agents are equipped with the following external tools:
 
 
 
-## 📄 License
+## 📄 Citation
+If you find this work helpful, please cite our paper:
 
-This project is released under the [MIT License](LICENSE).
+@misc{li2026omnigaia,
+      title={OmniGAIA: Towards Native Omni-Modal AI Agents}, 
+      author={Xiaoxi Li and Wenxiang Jiao and Jiarui Jin and Shijian Wang and Guanting Dong and Jiajie Jin and Hao Wang and Yinuo Wang and Ji-Rong Wen and Yuan Lu and Zhicheng Dou},
+      year={2026},
+      eprint={2602.xxxxx},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2602.xxxxx}, 
+}
+
+## 📄 License
+This project is released under the MIT License.
+
+##  📞 Contact
+For any questions or feedback, please reach out to us at xiaoxi_li@ruc.edu.cn.
+
