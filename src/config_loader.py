@@ -28,7 +28,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "data_root": "./data",
         "image_save_dir": "./cache/searched_images",
         "web_cache_dir": "./cache",
-        "code_files_output_dir": "./outputs/code_files",
     },
     "data": {
         "media_dirs": {
@@ -36,6 +35,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "audio": ["audios", "audio"],
             "image": ["images", "image"],
         }
+    },
+    "agent": {
+        "input_file": None,
+        "api_key": None,
+        "api_base_url": None,
+        "model_name": None,
+        "level": None,
+        "max_items": None,
+        "concurrent_limit": 5,
+        "use_asr": False,
+        "output_dir": "./outputs",
+        "request_timeout": 600,
+        "forced_final_timeout": 300,
+        "ffmpeg_timeout": 180,
+        "item_timeout": 1800,
+        "eval_timeout": 120,
+        "skip_eval": False,
     },
 }
 
@@ -63,7 +79,7 @@ def _resolve_path(path_str: str) -> str:
 def _normalize_paths(cfg: Dict[str, Any]) -> Dict[str, Any]:
     paths_cfg = cfg.setdefault("paths", {})
 
-    for key in ["data_root", "image_save_dir", "web_cache_dir", "code_files_output_dir"]:
+    for key in ["data_root", "image_save_dir", "web_cache_dir"]:
         value = paths_cfg.get(key)
         if isinstance(value, str) and value.strip():
             paths_cfg[key] = _resolve_path(value)

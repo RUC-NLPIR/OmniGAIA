@@ -1,7 +1,8 @@
 """
 eval_results.py — Re-evaluate existing agent results with LLM-based equivalence.
 
-Reads a JSON file produced by ``run_base_agent.py`` or ``run_omni_atlas.py``,
+Reads a JSON file produced by ``run_base_agent.py`` (with or without
+``--enable-active-perception``),
 re-computes exact-match (EM) and LLM-based equivalence scores, and writes the
 updated results + metrics back to disk.
 

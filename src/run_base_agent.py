@@ -1920,28 +1920,100 @@ def calculate_category_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 async def main():
     parser = argparse.ArgumentParser(description="Run baseline agent on QA items.")
-    parser.add_argument("--input_file", type=str, help="Path to the input JSON file containing QA items.")
+    parser.add_argument("--input_file", type=str, default=None, help="Path to the input JSON file containing QA items.")
     parser.add_argument("--max_items", type=int, default=None, help="Limit the number of items to process.")
-    parser.add_argument('--concurrent_limit', type=int, default=5, help="Maximum number of concurrent API calls")
-    parser.add_argument('--api_key', type=str, help="API Key")
-    parser.add_argument('--api_base_url', type=str, help="API Base URL")
+    parser.add_argument('--concurrent_limit', type=int, default=None, help="Maximum number of concurrent API calls")
+    parser.add_argument('--api_key', type=str, default=None, help="API Key")
+    parser.add_argument('--api_base_url', type=str, default=None, help="API Base URL")
     parser.add_argument('--level', type=str, default=None, help="Filter items by difficulty level (Easy, Medium, Hard)")
-    parser.add_argument('--model_name', type=str, help="Model Name")
-    parser.add_argument('--use_asr', action='store_true', help="Use ASR to convert audio/video audio to text input")
-    parser.add_argument("--output_dir", type=str, default="./outputs", help="Directory for results (default: ./outputs)")
-    parser.add_argument("--request_timeout", type=int, default=600, help="Per-request timeout in seconds (default: 600)")
-    parser.add_argument("--forced_final_timeout", type=int, default=300, help="Timeout for forced final answer after max turns (default: 300)")
-    parser.add_argument("--ffmpeg_timeout", type=int, default=180, help="Timeout for ffmpeg-related media processing in seconds (default: 180)")
-    parser.add_argument("--item_timeout", type=int, default=1800, help="Max total processing time per item in seconds (default: 1800)")
-    parser.add_argument("--eval_timeout", type=int, default=120, help="Timeout for LLM equivalence evaluation in seconds (default: 120)")
-    parser.add_argument("--skip_eval", action="store_true", help="Skip LLM-based equivalence evaluation")
+    parser.add_argument('--model_name', type=str, default=None, help="Model Name")
+    parser.add_argument('--use_asr', action='store_true', default=False, help="Use ASR to convert audio/video audio to text input")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory for results (default: ./outputs)")
+    parser.add_argument("--request_timeout", type=int, default=None, help="Per-request timeout in seconds (default: 600)")
+    parser.add_argument("--forced_final_timeout", type=int, default=None, help="Timeout for forced final answer after max turns (default: 300)")
+    parser.add_argument("--ffmpeg_timeout", type=int, default=None, help="Timeout for ffmpeg-related media processing in seconds (default: 180)")
+    parser.add_argument("--item_timeout", type=int, default=None, help="Max total processing time per item in seconds (default: 1800)")
+    parser.add_argument("--eval_timeout", type=int, default=None, help="Timeout for LLM equivalence evaluation in seconds (default: 120)")
+    parser.add_argument("--skip_eval", action="store_true", default=False, help="Skip LLM-based equivalence evaluation")
     parser.add_argument(
         "--enable-active-perception",
         action="store_true",
         help="Enable read_video/read_audio/read_image active-perception tools for Qwen models.",
     )
-    
+
     args = parser.parse_args()
+
+    # Apply config file values as fallback for any args not supplied on the CLI.
+    # CLI-provided values always take priority; config values fill in the rest.
+    _agent_cfg = APP_CONFIG.get("agent", {})
+
+    def _resolve(cli_val, cfg_key, default=None):
+        """Return cli_val if explicitly set, else config value, else hard default."""
+        if cli_val is not None:
+            return cli_val
+        cfg_val = _agent_cfg.get(cfg_key)
+        if cfg_val is not None:
+            return cfg_val
+        return default
+
+    args.input_file          = _resolve(args.input_file,          "input_file")
+    args.api_key             = _resolve(args.api_key,             "api_key")
+    args.api_base_url        = _resolve(args.api_base_url,        "api_base_url")
+    args.model_name          = _resolve(args.model_name,          "model_name")
+    args.level               = _resolve(args.level,               "level")
+    args.max_items           = _resolve(args.max_items,           "max_items")
+    args.concurrent_limit    = _resolve(args.concurrent_limit,    "concurrent_limit",    5)
+    args.output_dir          = _resolve(args.output_dir,          "output_dir",          "./outputs")
+    args.request_timeout     = _resolve(args.request_timeout,     "request_timeout",     600)
+    args.forced_final_timeout = _resolve(args.forced_final_timeout, "forced_final_timeout", 300)
+    args.ffmpeg_timeout      = _resolve(args.ffmpeg_timeout,      "ffmpeg_timeout",      180)
+    args.item_timeout        = _resolve(args.item_timeout,        "item_timeout",        1800)
+    args.eval_timeout        = _resolve(args.eval_timeout,        "eval_timeout",        120)
+    # Boolean flags: True on CLI always wins; otherwise fall back to config value.
+    args.use_asr  = args.use_asr  or bool(_agent_cfg.get("use_asr",  False))
+    args.skip_eval = args.skip_eval or bool(_agent_cfg.get("skip_eval", False))
+
+    data_root = APP_CONFIG.get("paths", {}).get("data_root")
+
+    def _resolve_media_path(path_value: Optional[str], input_file_path: Optional[str]) -> Optional[str]:
+        """Resolve relative media paths against cwd/data_root/input_file dir.
+
+        For omni_modal_input, metadata often stores paths like "videos/xxx.mp4".
+        We keep backward compatibility by trying multiple candidates, but prefer
+        existing files first.
+        """
+        if not isinstance(path_value, str):
+            return path_value
+
+        source = path_value.strip()
+        if not source:
+            return source
+        if source.startswith(("http://", "https://", "data:")):
+            return source
+        if os.path.isabs(source):
+            return source
+
+        candidates: List[str] = [source]
+
+        if isinstance(data_root, str) and data_root.strip():
+            candidates.append(os.path.join(data_root, source))
+
+        if input_file_path:
+            input_dir = os.path.dirname(os.path.abspath(input_file_path))
+            candidates.append(os.path.join(input_dir, source))
+
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+
+        if isinstance(data_root, str) and data_root.strip():
+            return os.path.join(data_root, source)
+
+        if input_file_path:
+            input_dir = os.path.dirname(os.path.abspath(input_file_path))
+            return os.path.join(input_dir, source)
+
+        return source
     
     if not args.input_file:  
         print("Please provide an input file using --input_file")
@@ -1972,8 +2044,11 @@ async def main():
     if args.max_items:
         items = items[:args.max_items]
 
-    if args.enable_active_perception and "qwen" not in args.model_name.lower():
-        logger.warning("--enable-active-perception is currently only supported in QwenBaseAgent. Ignoring for non-Qwen models.")
+    model_name_lower = (args.model_name or "").lower()
+    is_qwen_like_model = ("qwen" in model_name_lower) or ("omniatlas" in model_name_lower)
+
+    if args.enable_active_perception and not is_qwen_like_model:
+        logger.warning("--enable-active-perception is currently only supported in Qwen/OmniAtlas models. Ignoring for this model.")
 
     semaphore = asyncio.Semaphore(args.concurrent_limit)
     
@@ -1983,7 +2058,7 @@ async def main():
     api_keys = [args.api_key]
     
     for key in api_keys:
-        if 'qwen' in args.model_name.lower():
+        if is_qwen_like_model:
             agent = QwenBaseAgent(
                 api_key=key, 
                 model=args.model_name, 
@@ -2026,7 +2101,9 @@ async def main():
                 for inp in item["omni_modal_input"]:
                     path = inp.get("path") if isinstance(inp, dict) else inp
                     if path:
-                        all_audio_paths.add(path)
+                        resolved_path = _resolve_media_path(path, args.input_file)
+                        if resolved_path:
+                            all_audio_paths.add(resolved_path)
             else:
                 # Fallback to OmniInfoManager
                 paths = omni_manager.get_file_paths_for_item(item)
@@ -2065,7 +2142,9 @@ async def main():
              # Use the provided list of dicts directly
              for inp in item["omni_modal_input"]:
                  if "path" in inp:
-                     media_items.append(inp)
+                    normalized_inp = dict(inp)
+                    normalized_inp["path"] = _resolve_media_path(inp.get("path"), args.input_file)
+                    media_items.append(normalized_inp)
         else:
             # Fallback to old logic (OmniInfoManager)
             paths = omni_manager.get_file_paths_for_item(item)
