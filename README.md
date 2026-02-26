@@ -5,11 +5,11 @@
 <div align="center">
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.xxxxx-b5212f.svg?logo=arxiv)](https://arxiv.org/abs/) 
-[![OmniGAIA-Benchmark](https://img.shields.io/badge/OmniGAIA-Benchmark-yellow?logo=huggingface)](https://huggingface.co/collections/RUC-NLPIR/omnigaia)
+[![OmniGAIA-Benchmark](https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?logo=huggingface)](https://huggingface.co/collections/RUC-NLPIR/omnigaia)
 [![Leaderboard](https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?logo=bar-chart)](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)
 [![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-<!-- [![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FRUC_NLPIR%2Fstatus%2F1777017075399684133)](https://x.com/RUC_NLPIR/status/1777017075399684133) -->
+[![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FRUC_NLPIR%2Fstatus%2F1777017075399684133)](https://x.com/RUC_NLPIR/status/1777017075399684133)
 
 </div>
 
@@ -25,10 +25,10 @@
 
 <h5 align="center"> If you like our project, please give us a star ⭐ on GitHub for the latest update.</h5>
 
-<!-- 
+
 <div align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=18&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Towards+Next-Gen+Omni-Modal+AI+Agent;Powered+by+RUC-NLPIR+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
-</div> -->
+  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=15&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Towards+Next-Gen+Omni-Modal+AI+Agents;Powered+by+RUC+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
+</div>
 
 
 
@@ -252,7 +252,7 @@ OmniAtlas behavior is enabled in `run_base_agent.py` via `--enable-active-percep
 python src/run_base_agent.py \
     --input_file ./data/test_metadata.json \
     --api_base_url "http://localhost:8000/v1" \
-    --model_name "omniatlas-30b" \
+    --model_name "omniatlas-qwen-30b-a3b" \
     --api_key "empty" \
     --enable-active-perception \
     --concurrent_limit 16
