@@ -9,8 +9,7 @@
 [![Leaderboard](https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?logo=bar-chart)](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)
 [![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FRUC_NLPIR%2Fstatus%2F1777017075399684133)](https://x.com/RUC_NLPIR/status/1777017075399684133)
-
+[![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FXiaoxiLi0111%2Fstatus%2F2027285816947753209)](https://x.com/XiaoxiLi0111/status/2027285816947753209?s=19)
 </div>
 
 
