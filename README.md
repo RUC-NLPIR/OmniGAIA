@@ -4,7 +4,7 @@
 
 <div align="center">
 
-[![Paper](https://img.shields.io/badge/arXiv-2602.xxxxx-b5212f.svg?logo=arxiv)](https://arxiv.org/abs/) 
+[![Paper](https://img.shields.io/badge/arXiv-2602.22897-b5212f.svg?logo=arxiv)](https://arxiv.org/abs/) 
 [![OmniGAIA-Benchmark](https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?logo=huggingface)](https://huggingface.co/collections/RUC-NLPIR/omnigaia)
 [![Leaderboard](https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?logo=bar-chart)](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)
 [![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
@@ -36,7 +36,7 @@
 
 ## 📣 Latest News
 
-- **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.xxxxx)** and **[Hugging Face](https://huggingface.co/papers/2602.xxxxx)**.
+- **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.22897)** and **[Hugging Face](https://huggingface.co/papers/2602.22897)**.
 - **[Feb 27, 2026]**: 📈 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
 - **[Feb 27, 2026]**: 🚀 Full codebase released. You can now deploy omni-modal AI agents for images, audio, and video, along with research tools.
 
@@ -339,7 +339,7 @@ If you find this work helpful, please kindly cite our paper:
       title={OmniGAIA: Towards Native Omni-Modal AI Agents}, 
       author={Xiaoxi Li and Wenxiang Jiao and Jiarui Jin and Shijian Wang and Guanting Dong and Jiajie Jin and Hao Wang and Yinuo Wang and Ji-Rong Wen and Yuan Lu and Zhicheng Dou},
       year={2026},
-      eprint={2602.xxxxx},
+      eprint={2602.22897},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
       url={https://arxiv.org/abs/2602.xxxxx}, 
