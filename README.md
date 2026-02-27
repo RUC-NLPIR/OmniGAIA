@@ -332,8 +332,9 @@ OmniGAIA agents are equipped with the following external tools:
 
 
 ## 📄 Citation
-If you find this work helpful, please cite our paper:
+If you find this work helpful, please kindly cite our paper:
 
+```
 @misc{li2026omnigaia,
       title={OmniGAIA: Towards Native Omni-Modal AI Agents}, 
       author={Xiaoxi Li and Wenxiang Jiao and Jiarui Jin and Shijian Wang and Guanting Dong and Jiajie Jin and Hao Wang and Yinuo Wang and Ji-Rong Wen and Yuan Lu and Zhicheng Dou},
@@ -343,6 +344,7 @@ If you find this work helpful, please cite our paper:
       primaryClass={cs.AI},
       url={https://arxiv.org/abs/2602.xxxxx}, 
 }
+```
 
 ## 📄 License
 This project is released under the MIT License.
