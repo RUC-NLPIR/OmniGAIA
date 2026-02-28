@@ -5,7 +5,7 @@
 <div align="center">
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.22897-b5212f.svg?logo=arxiv)](https://arxiv.org/abs/2602.22897) 
-[![OmniGAIA-Benchmark](https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?logo=huggingface)](https://huggingface.co/collections/RUC-NLPIR/omnigaia)
+[![OmniGAIA-Benchmark](https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?logo=huggingface)](https://huggingface.co/datasets/RUC-NLPIR/OmniGAIA)
 [![Leaderboard](https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?logo=bar-chart)](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)
 [![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
