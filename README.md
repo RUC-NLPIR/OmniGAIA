@@ -341,7 +341,7 @@ If you find this work helpful, please kindly cite our paper:
       eprint={2602.22897},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2602.xxxxx}, 
+      url={https://arxiv.org/abs/2602.22897}, 
 }
 ```
 
