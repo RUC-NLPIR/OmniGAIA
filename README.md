@@ -11,10 +11,9 @@
 [![Paper](https://img.shields.io/badge/Paper-2602.22897-b5212f.svg?logo=arxiv)](https://arxiv.org/abs/2602.22897) 
 [![OmniGAIA-Benchmark](https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?logo=huggingface)](https://huggingface.co/datasets/RUC-NLPIR/OmniGAIA)
 [![Leaderboard](https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?logo=bar-chart)](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)
-[![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
+[![License](https://img.shields.io/badge/LICENSE-MIT-green.svg)](https://opensource.org/licenses/MIT) 
 [![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FXiaoxiLi0111%2Fstatus%2F2027285816947753209)](https://x.com/XiaoxiLi0111/status/2027285816947753209?s=19)
-[![WeChat](https://img.shields.io/badge/WeChat-07C160?logo=wechat&logoColor=white)](https://mp.weixin.qq.com/s/j1bshEMTFHp83daUckq4iQ)
 </div>
 
 <!-- <a href="https://arxiv.org/abs/2602.22897"><img src="https://img.shields.io/badge/Paper-2602.22897-b5212f.svg?style=for-the-badge&logo=arxiv" alt="arXiv"></a>
