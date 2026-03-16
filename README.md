@@ -1,9 +1,9 @@
 <!-- <h2 align="center">OmniGAIA: Towards Native Omni-Modal AI Agents</a></h2> -->
-<h2 align="center">
-  <img src="assets/omnigaia_title.png" alt="OmniGAIA Title" width="225"/>
-</h2>
+<h1 align="center">
+  <img src="assets/omnigaia_title.png" alt="OmniGAIA Title" width="225"/> <br>Towards Native Omni-Modal AI Agents
+</h1>
 
-<p align="center"><i>Towards Native Omni-Modal AI Agents: The OmniGAIA Benchmark and OmniAtlas Model Series</i></p>
+<p align="center"><i>The OmniGAIA Benchmark and the OmniAtlas Foundation Agents</i></p>
 
 
 <div align="center">
