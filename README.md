@@ -3,7 +3,7 @@
   <img src="assets/omnigaia_title.png" alt="OmniGAIA Title" width="225"/>
 </h2>
 
-<p align="center"><i>Towards Native Omni-Modal AI Agents: The OmniGAIA Benchmark and the OmniAtlas Model Series</i></p>
+<p align="center"><i>Towards Native Omni-Modal AI Agents: The OmniGAIA Benchmark and OmniAtlas Model Series</i></p>
 
 
 <div align="center">
