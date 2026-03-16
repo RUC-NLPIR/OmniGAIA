@@ -1,5 +1,9 @@
-<h1 align="center">OmniGAIA: Towards Native Omni-Modal AI Agents</a></h1>
+<!-- <h2 align="center">OmniGAIA: Towards Native Omni-Modal AI Agents</a></h2> -->
+<h2 align="center">
+  <img src="assets/omnigaia_title.png" alt="OmniGAIA Title" width="225"/>
+</h2>
 
+<p align="center"><i>Towards Native Omni-Modal AI Agents: The OmniGAIA Benchmark and the OmniAtlas Model Series</i></p>
 
 
 <div align="center">
@@ -11,6 +15,14 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 [![X (formerly Twitter) URL](https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2FXiaoxiLi0111%2Fstatus%2F2027285816947753209)](https://x.com/XiaoxiLi0111/status/2027285816947753209?s=19)
 </div>
+
+<!-- <a href="https://arxiv.org/abs/2602.22897"><img src="https://img.shields.io/badge/Paper-2602.22897-b5212f.svg?style=for-the-badge&logo=arxiv" alt="arXiv"></a>
+<a href="https://huggingface.co/datasets/RUC-NLPIR/OmniGAIA"><img src="https://img.shields.io/badge/Benchmark-OmniGAIA-yellow?style=for-the-badge&logo=huggingface&logoColor=white" alt="Huggingface Benchmark"></a>
+<a href="https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard"><img src="https://img.shields.io/badge/📈%20Leaderboard-Submission-7b39e2?style=for-the-badge&logo=bar-chart&logoColor=white" alt="Leaderboard"></a>
+<a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/LICENSE-MIT-green?style=for-the-badge" alt="MIT License"></a>
+<a href="https://x.com/XiaoxiLi0111" target="_blank">
+  <img src="https://img.shields.io/badge/Twitter-@XiaoxiLi0111-1da1f2?style=for-the-badge&logo=twitter" alt="X (Twitter)">
+</a> -->
 
 
 
@@ -25,9 +37,9 @@
 <h5 align="center"> If you like our project, please give us a star ⭐ on GitHub for the latest update.</h5>
 
 
-<div align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=15&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Towards+Next-Gen+Omni-Modal+AI+Agents;Powered+by+RUC+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
-</div>
+<!-- <div align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=18&duration=3000&pause=1000&color=4420A8&center=true&vCenter=true&width=680&lines=Welcome+to+OmniGAIA;Towards+Next-Gen+Omni-Modal+AI+Agents;Powered+by+RUC+x+Xiaohongshu" alt="Typing Animation purple OmniGAIA" />
+</div> -->
 
 
 
