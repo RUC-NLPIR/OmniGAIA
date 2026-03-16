@@ -46,9 +46,9 @@
 
 
 ## 📣 Latest News
-
+- **[Mar 16, 2026]**: 📈 Submissions are open on the **[Leaderboard](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)**. Welcome to submit your omni-modal agents!
 - **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.22897)** and **[Hugging Face](https://huggingface.co/papers/2602.22897)**.
-- **[Feb 27, 2026]**: 📈 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
+- **[Feb 27, 2026]**: 🤗 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
 - **[Feb 27, 2026]**: 🚀 Full codebase released. You can now deploy omni-modal AI agents for images, audio, and video, along with research tools.
 
 
