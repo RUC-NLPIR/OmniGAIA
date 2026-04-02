@@ -46,6 +46,7 @@
 
 
 ## 📣 Latest News
+- **[Apr 2, 2026]**: 📊 Added the official **[Qwen3.5-Omni-Flash & Qwen3.5-Omni-Plus](https://qwen.ai/blog?id=qwen3.5-omni)** results to the **[Leaderboard](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)**.
 - **[Mar 16, 2026]**: 📈 Submissions are open on the **[Leaderboard](https://huggingface.co/spaces/RUC-NLPIR/OmniGAIA-Leaderboard)**. Welcome to submit your omni-modal agents!
 - **[Feb 27, 2026]**: 📄 Our paper is now available on **[arXiv](https://arxiv.org/abs/2602.22897)** and **[Hugging Face](https://huggingface.co/papers/2602.22897)**.
 - **[Feb 27, 2026]**: 🤗 Our OmniGAIA benchmark and OmniAtlas models are now available on **[Hugging Face](https://huggingface.co/collections/RUC-NLPIR/omnigaia)**.
